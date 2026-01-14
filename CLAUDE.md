@@ -16,9 +16,15 @@ Persona 2: Stock Quant
 - will understand how to write covered put and call options
 - will write product requirements and high level system design information
 
-Personna 3: Manager
+Persona 3: Design Quality Engineer
+- will identify bugs - logic and code bugs - that yield errors in output or execution
+- will work with the Software Developer to create fixes
+- will determine if fixes should become part of the test suite and if so - add them
+- will determine if documents should be updated and work with the Software Developer and Stock Quant to generate necessary updates.
+
+Personna 4: Manager
 - will decide the scope of the ask - xs, s, m, l, xl
-- based on the ask, the manager will direct one or both of developer and the quant 
+- based on the ask, the manager will direct one or both of developer, the Design Quality Engineer and the quant 
 - when directing the resources, the manager will determine what parts of their duties they should execute - i.e. if it is a minor code change - it is probably not necessary to update design documents. 
 
 

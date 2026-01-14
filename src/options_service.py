@@ -115,37 +115,106 @@ class OptionsChainService:
         contracts: List[OptionContract] = []
 
         # Try different response structures
-        # Structure 1: {"data": [contracts]}
+        # Structure 1: {"data": [expiration_groups]} where each group has "options": {"CALL": [], "PUT": []}
         # Structure 2: Direct list [contracts]
+        # Structure 3: Other nested structures
+
         if isinstance(raw_data, list):
+            # Could be a list of expiration groups OR a list of contracts
             data_list = raw_data
         else:
             data_list = raw_data.get("data", [])
 
-            # Structure 3: Try to extract contracts from other possible structures
-            if not data_list:
-                data_list = self._extract_contracts_from_response(raw_data)
+        # If we got data, try to extract contracts from it
+        if data_list:
+            contracts = self._extract_contracts_from_list(data_list, symbol)
+        else:
+            # Try alternate extraction methods
+            extracted = self._extract_contracts_from_response(raw_data)
+            if extracted:
+                contracts = self._parse_contracts_from_list(extracted, symbol)
 
-        if not data_list:
+        if not contracts:
             raise DataValidationError(
                 "No contract data found in response. " "API response structure may have changed."
             )
 
-        # Parse each contract
+        return contracts
+
+    def _extract_contracts_from_list(self, data_list: List[Any], symbol: str) -> List[OptionContract]:
+        """
+        Extract and parse contracts from a list of items.
+
+        The list might contain:
+        1. Expiration groups (dicts with "options" key)
+        2. Direct contract objects
+
+        Args:
+            data_list: List of data items
+            symbol: Stock ticker symbol
+
+        Returns:
+            List of parsed OptionContract objects
+        """
+        contracts: List[OptionContract] = []
         parse_errors = 0
+        total_items = 0
+
+        for item in data_list:
+            if not isinstance(item, dict):
+                continue
+
+            # Check if this is an expiration group (has "options" key with CALL/PUT structure)
+            if "options" in item and isinstance(item["options"], dict):
+                # Extract contracts from the nested structure
+                for option_type in ["CALL", "PUT"]:
+                    if option_type in item["options"]:
+                        option_contracts = item["options"][option_type]
+                        if isinstance(option_contracts, list):
+                            for contract_data in option_contracts:
+                                total_items += 1
+                                try:
+                                    contract = self._parse_single_contract(contract_data, symbol)
+                                    contracts.append(contract)
+                                except Exception as e:
+                                    parse_errors += 1
+                                    if parse_errors <= 3:  # Only log first few errors to avoid spam
+                                        logger.debug(f"Failed to parse contract: {e}")
+            else:
+                # Try to parse as a direct contract
+                total_items += 1
+                try:
+                    contract = self._parse_single_contract(item, symbol)
+                    contracts.append(contract)
+                except Exception as e:
+                    parse_errors += 1
+                    if parse_errors <= 3:
+                        logger.debug(f"Failed to parse contract: {e}")
+
+        if parse_errors > 0:
+            logger.info(f"Parsed {len(contracts)} contracts, {parse_errors} errors out of {total_items} items")
+
+        if not contracts and total_items > 0:
+            raise DataValidationError("No valid contracts found. All contract parsing failed.")
+
+        return contracts
+
+    def _parse_contracts_from_list(self, data_list: List[Dict[str, Any]], symbol: str) -> List[OptionContract]:
+        """Parse a list of contract dictionaries."""
+        contracts: List[OptionContract] = []
+        parse_errors = 0
+
         for item in data_list:
             try:
                 contract = self._parse_single_contract(item, symbol)
                 contracts.append(contract)
             except Exception as e:
                 parse_errors += 1
-                logger.warning(f"Failed to parse contract: {e}. Data: {item}")
+                if parse_errors <= 3:
+                    logger.debug(f"Failed to parse contract: {e}")
 
         if parse_errors > 0:
-            logger.warning(f"Failed to parse {parse_errors} out of {len(data_list)} contracts")
-
-        if not contracts:
-            raise DataValidationError("No valid contracts found. All contract parsing failed.")
+            logger.info(f"Parsed {len(contracts)} contracts, {parse_errors} errors")
 
         return contracts
 
@@ -173,6 +242,10 @@ class OptionsChainService:
         if option_type.lower() not in ["call", "put"]:
             raise ValueError(f"Invalid option type: {option_type}")
 
+        # Handle both old and new API field names
+        # Old API: "last", New API: "lastPrice"
+        last_price = self._safe_float(data.get("lastPrice") or data.get("last"))
+
         return OptionContract(
             symbol=symbol,
             strike=strike,
@@ -180,7 +253,7 @@ class OptionsChainService:
             option_type=option_type,
             bid=self._safe_float(data.get("bid")),
             ask=self._safe_float(data.get("ask")),
-            last=self._safe_float(data.get("last")),
+            last=last_price,
             volume=self._safe_int(data.get("volume")),
             open_interest=self._safe_int(data.get("openInterest")),
             delta=self._safe_float(data.get("delta")),
@@ -249,11 +322,18 @@ class OptionsChainService:
             if key in data:
                 value = data[key]
                 if isinstance(value, list):
+                    # Direct list of contracts
                     contracts.extend(value)
                 elif isinstance(value, dict):
-                    # Might be grouped by expiration
-                    for sub_value in value.values():
+                    # Might be grouped by type (CALL/PUT) or expiration
+                    for sub_key, sub_value in value.items():
                         if isinstance(sub_value, list):
+                            # Found a list of contracts
                             contracts.extend(sub_value)
+                        elif isinstance(sub_value, dict):
+                            # Nested dict - recurse one more level
+                            for nested_value in sub_value.values():
+                                if isinstance(nested_value, list):
+                                    contracts.extend(nested_value)
 
         return contracts
