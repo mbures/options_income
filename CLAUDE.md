@@ -23,3 +23,4 @@ Personna 3: Manager
 
 
 # When a request is made, it is passed to the manager for dispostion
+# After the manager decides the scope, resourcing and actions, it will print on the screen this plan out prior to assigning work

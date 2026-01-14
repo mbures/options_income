@@ -1,8 +1,10 @@
 """Configuration management for Finnhub Options Chain retrieval."""
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Optional
+from pathlib import Path
 
 
 @dataclass
@@ -58,5 +60,50 @@ class FinnhubConfig:
                 f"{api_key_var} environment variable not set. "
                 f"Get your API key from https://finnhub.io/register"
             )
+
+        return cls(api_key=api_key)
+
+    @classmethod
+    def from_file(cls, file_path: str = "config/finhub_api_key.txt") -> "FinnhubConfig":
+        """
+        Load configuration from a file.
+
+        The file should contain a line in the format:
+        finhub_api_key = 'value'
+
+        Args:
+            file_path: Path to the API key file (relative to project root)
+
+        Returns:
+            FinnhubConfig instance
+
+        Raises:
+            ValueError: If file not found or API key cannot be parsed
+            FileNotFoundError: If the file does not exist
+        """
+        # Get the project root (parent of src directory)
+        project_root = Path(__file__).parent.parent
+        full_path = project_root / file_path
+
+        if not full_path.exists():
+            raise FileNotFoundError(
+                f"API key file not found at {full_path}. "
+                f"Please create the file with format: finhub_api_key = 'your_key'"
+            )
+
+        # Read the file and parse the API key
+        content = full_path.read_text().strip()
+
+        # Parse the format: finhub_api_key = 'value' or finhub_api_key = "value"
+        match = re.match(r"finhub_api_key\s*=\s*['\"](.+?)['\"]", content)
+        if not match:
+            raise ValueError(
+                f"Could not parse API key from {file_path}. "
+                f"Expected format: finhub_api_key = 'your_key'"
+            )
+
+        api_key = match.group(1)
+        if not api_key:
+            raise ValueError("API key is empty in config file")
 
         return cls(api_key=api_key)

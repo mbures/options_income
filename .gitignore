@@ -1,5 +1,7 @@
 # API Keys
 api_key.txt
+config/finhub_api_key.txt
+finhub_api_key.txt
 
 # Python Virtual Environments
 venv/

@@ -36,8 +36,12 @@ Examples:
   %(prog)s TSLA --output-file out.json # Save to file
   %(prog)s MSFT --verbose              # Enable debug logging
 
-Environment:
-  FINNHUB_API_KEY    Required API key from https://finnhub.io/register
+Configuration:
+  API key can be provided in two ways (checked in this order):
+  1. File: config/finhub_api_key.txt (format: finhub_api_key = 'your_key')
+  2. Environment variable: FINNHUB_API_KEY
+
+  Get your API key from https://finnhub.io/register
         """,
     )
 
@@ -62,8 +66,11 @@ Environment:
         logging.getLogger().setLevel(logging.INFO)
 
     try:
-        # Load configuration
-        config = FinnhubConfig.from_env()
+        # Load configuration - try file first, then environment variable
+        try:
+            config = FinnhubConfig.from_file()
+        except FileNotFoundError:
+            config = FinnhubConfig.from_env()
 
         # Initialize client and service
         with FinnhubClient(config) as client:
@@ -91,8 +98,10 @@ Environment:
 
     except ValueError as e:
         print(f"Configuration error: {e}", file=sys.stderr)
-        print("\nPlease set FINNHUB_API_KEY environment variable.", file=sys.stderr)
-        print("Get a free API key at https://finnhub.io/register", file=sys.stderr)
+        print("\nPlease provide your API key in one of these ways:", file=sys.stderr)
+        print("  1. Create config/finhub_api_key.txt with: finhub_api_key = 'your_key'", file=sys.stderr)
+        print("  2. Set FINNHUB_API_KEY environment variable", file=sys.stderr)
+        print("\nGet a free API key at https://finnhub.io/register", file=sys.stderr)
         sys.exit(1)
 
     except FinnhubAPIError as e:
