@@ -1,6 +1,6 @@
 {
   "symbol": "F",
-  "retrieved_at": "2026-01-14T14:17:40.028892+00:00",
+  "retrieved_at": "2026-01-14T14:51:11.851111+00:00",
   "total_contracts": 684,
   "total_calls": 342,
   "total_puts": 342,

@@ -1,10 +1,102 @@
-"""Configuration management for Finnhub Options Chain retrieval."""
+"""Configuration management for API clients."""
 
 import os
 import re
 from dataclasses import dataclass
 from typing import Optional
 from pathlib import Path
+
+
+@dataclass
+class AlphaVantageConfig:
+    """
+    Configuration for Alpha Vantage API client.
+
+    Attributes:
+        api_key: Alpha Vantage API key for authentication
+        base_url: Base URL for Alpha Vantage API
+        timeout: Request timeout in seconds
+        max_retries: Maximum number of retry attempts for failed requests
+        retry_delay: Initial delay between retries (seconds)
+    """
+
+    api_key: str
+    base_url: str = "https://www.alphavantage.co/query"
+    timeout: int = 15
+    max_retries: int = 3
+    retry_delay: float = 1.0
+
+    def __post_init__(self) -> None:
+        """Validate configuration after initialization."""
+        if not self.api_key:
+            raise ValueError("API key cannot be empty")
+
+        if self.timeout <= 0:
+            raise ValueError("Timeout must be positive")
+
+        if self.max_retries < 0:
+            raise ValueError("Max retries cannot be negative")
+
+        if self.retry_delay <= 0:
+            raise ValueError("Retry delay must be positive")
+
+    @classmethod
+    def from_env(cls, api_key_var: str = "ALPHA_VANTAGE_API_KEY") -> "AlphaVantageConfig":
+        """
+        Load configuration from environment variables.
+
+        Args:
+            api_key_var: Name of environment variable containing API key
+
+        Returns:
+            AlphaVantageConfig instance
+
+        Raises:
+            ValueError: If API key environment variable is not set
+        """
+        api_key = os.getenv(api_key_var)
+        if not api_key:
+            raise ValueError(
+                f"{api_key_var} environment variable not set. "
+                f"Get your API key from https://www.alphavantage.co/support/#api-key"
+            )
+
+        return cls(api_key=api_key)
+
+    @classmethod
+    def from_file(cls, file_path: str = "alpha_vantage_api_key.txt") -> "AlphaVantageConfig":
+        """
+        Load configuration from a file.
+
+        The file should contain the API key as plain text.
+
+        Args:
+            file_path: Path to the API key file (relative to project root)
+
+        Returns:
+            AlphaVantageConfig instance
+
+        Raises:
+            FileNotFoundError: If the file does not exist
+            ValueError: If API key is empty
+        """
+        # Get the project root (parent of src directory)
+        project_root = Path(__file__).parent.parent
+        full_path = project_root / file_path
+
+        if not full_path.exists():
+            raise FileNotFoundError(
+                f"API key file not found at {full_path}. "
+                f"Please create the file with your Alpha Vantage API key."
+            )
+
+        # Read the file and get the API key
+        api_key = full_path.read_text().strip()
+
+        if not api_key:
+            raise ValueError("API key is empty in config file")
+
+        return cls(api_key=api_key)
 
 
 @dataclass
