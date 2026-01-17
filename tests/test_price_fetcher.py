@@ -2,16 +2,17 @@
 
 import pytest
 import time
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, patch
 from datetime import datetime
 
 from src.price_fetcher import (
     PriceDataFetcher,
     PriceDataCache,
-    CacheEntry
+    CacheEntry,
+    AlphaVantagePriceDataFetcher
 )
 from src.volatility import PriceData
-from src.finnhub_client import FinnhubAPIError
+from src.finnhub_client import FinnhubClient, FinnhubAPIError
 
 
 class TestCacheEntry:
@@ -132,32 +133,32 @@ class TestPriceDataCache:
 
 
 class TestPriceDataFetcher:
-    """Test suite for PriceDataFetcher class."""
+    """Test suite for PriceDataFetcher class (caching layer)."""
 
     def create_mock_client(self):
         """Create a mock FinnhubClient."""
-        client = Mock()
+        client = Mock(spec=FinnhubClient)
         client.config = Mock()
         client.config.base_url = "https://finnhub.io/api/v1"
         client.config.api_key = "test_key"
         client.config.timeout = 10
-        client.session = Mock()
         return client
 
-    def create_mock_candle_response(self, n_days=60):
-        """Create a mock successful candle response."""
-        base_time = int(datetime(2026, 1, 1).timestamp())
-        day_seconds = 86400
+    def create_mock_price_data(self, n_days=60):
+        """Create mock PriceData."""
+        base_date = datetime(2026, 1, 1)
+        dates = [(base_date.replace(day=1+i)).strftime("%Y-%m-%d") for i in range(min(n_days, 28))]
+        if n_days > 28:
+            dates = [f"2026-01-{str(i+1).zfill(2)}" for i in range(n_days)]
 
-        return {
-            "s": "ok",
-            "t": [base_time + i * day_seconds for i in range(n_days)],
-            "o": [100.0 + i * 0.1 for i in range(n_days)],
-            "h": [102.0 + i * 0.1 for i in range(n_days)],
-            "l": [99.0 + i * 0.1 for i in range(n_days)],
-            "c": [101.0 + i * 0.1 for i in range(n_days)],
-            "v": [1000000 + i * 1000 for i in range(n_days)]
-        }
+        return PriceData(
+            dates=dates,
+            opens=[100.0 + i * 0.1 for i in range(n_days)],
+            highs=[102.0 + i * 0.1 for i in range(n_days)],
+            lows=[99.0 + i * 0.1 for i in range(n_days)],
+            closes=[101.0 + i * 0.1 for i in range(n_days)],
+            volumes=[1000000 + i * 1000 for i in range(n_days)]
+        )
 
     def test_fetcher_initialization(self):
         """Test fetcher initialization."""
@@ -182,11 +183,9 @@ class TestPriceDataFetcher:
         client = self.create_mock_client()
         fetcher = PriceDataFetcher(client, enable_cache=False)
 
-        # Mock API response
-        mock_response = Mock()
-        mock_response.json.return_value = self.create_mock_candle_response(60)
-        mock_response.raise_for_status = Mock()
-        client.session.get.return_value = mock_response
+        # Mock client.get_candle_data to return PriceData
+        mock_price_data = self.create_mock_price_data(60)
+        client.get_candle_data.return_value = mock_price_data
 
         # Fetch data
         price_data = fetcher.fetch_price_data("F", lookback_days=60)
@@ -194,29 +193,24 @@ class TestPriceDataFetcher:
         assert isinstance(price_data, PriceData)
         assert len(price_data.dates) == 60
         assert len(price_data.closes) == 60
-        assert len(price_data.opens) == 60
-        assert len(price_data.highs) == 60
-        assert len(price_data.lows) == 60
-        assert price_data.volumes is not None
+        client.get_candle_data.assert_called_once_with("F", 60, "D")
 
     def test_fetch_price_data_uses_cache(self):
         """Test that fetcher uses cached data."""
         client = self.create_mock_client()
         fetcher = PriceDataFetcher(client, enable_cache=True)
 
-        # Mock first API call
-        mock_response = Mock()
-        mock_response.json.return_value = self.create_mock_candle_response(60)
-        mock_response.raise_for_status = Mock()
-        client.session.get.return_value = mock_response
+        # Mock client.get_candle_data
+        mock_price_data = self.create_mock_price_data(60)
+        client.get_candle_data.return_value = mock_price_data
 
-        # First fetch - should hit API
+        # First fetch - should hit client
         price_data_1 = fetcher.fetch_price_data("F", lookback_days=60)
-        assert client.session.get.call_count == 1
+        assert client.get_candle_data.call_count == 1
 
         # Second fetch - should use cache
         price_data_2 = fetcher.fetch_price_data("F", lookback_days=60)
-        assert client.session.get.call_count == 1  # Still 1, no new call
+        assert client.get_candle_data.call_count == 1  # Still 1, no new call
 
         # Data should be identical
         assert price_data_1.dates == price_data_2.dates
@@ -226,11 +220,8 @@ class TestPriceDataFetcher:
         client = self.create_mock_client()
         fetcher = PriceDataFetcher(client, enable_cache=False)
 
-        # Mock no data response
-        mock_response = Mock()
-        mock_response.json.return_value = {"s": "no_data"}
-        mock_response.raise_for_status = Mock()
-        client.session.get.return_value = mock_response
+        # Mock client to raise ValueError
+        client.get_candle_data.side_effect = ValueError("No price data available for INVALID")
 
         with pytest.raises(ValueError, match="No price data available"):
             fetcher.fetch_price_data("INVALID")
@@ -240,87 +231,22 @@ class TestPriceDataFetcher:
         client = self.create_mock_client()
         fetcher = PriceDataFetcher(client, enable_cache=False)
 
-        # Mock API error
-        client.session.get.side_effect = Exception("API Error")
+        # Mock client to raise FinnhubAPIError
+        client.get_candle_data.side_effect = FinnhubAPIError("Failed to fetch candle data")
 
         with pytest.raises(FinnhubAPIError, match="Failed to fetch candle data"):
             fetcher.fetch_price_data("F")
-
-    def test_parse_candle_response(self):
-        """Test parsing of candle response."""
-        client = self.create_mock_client()
-        fetcher = PriceDataFetcher(client)
-
-        response = self.create_mock_candle_response(30)
-
-        price_data = fetcher._parse_candle_response(response, "F", 30)
-
-        assert len(price_data.dates) == 30
-        assert len(price_data.closes) == 30
-        assert all(isinstance(d, str) for d in price_data.dates)
-        assert all(isinstance(c, float) for c in price_data.closes)
-
-    def test_parse_candle_response_filters_to_window(self):
-        """Test that parser filters to requested window."""
-        client = self.create_mock_client()
-        fetcher = PriceDataFetcher(client)
-
-        # Response has 60 days, but we only want 20
-        response = self.create_mock_candle_response(60)
-
-        price_data = fetcher._parse_candle_response(response, "F", 20)
-
-        assert len(price_data.dates) == 20
-
-    def test_validate_price_data_success(self):
-        """Test price data validation with valid data."""
-        client = self.create_mock_client()
-        fetcher = PriceDataFetcher(client)
-
-        opens = [100.0, 101.0, 102.0]
-        highs = [102.0, 103.0, 104.0]
-        lows = [99.0, 100.0, 101.0]
-        closes = [101.0, 102.0, 103.0]
-
-        # Should not raise
-        fetcher._validate_price_data(opens, highs, lows, closes)
-
-    def test_validate_price_data_non_positive(self):
-        """Test validation catches non-positive prices."""
-        client = self.create_mock_client()
-        fetcher = PriceDataFetcher(client)
-
-        opens = [100.0, 0.0]  # Invalid
-        highs = [102.0, 102.0]
-        lows = [99.0, 99.0]
-        closes = [101.0, 101.0]
-
-        with pytest.raises(ValueError, match="Non-positive price"):
-            fetcher._validate_price_data(opens, highs, lows, closes)
-
-    def test_validate_price_data_high_less_than_low(self):
-        """Test validation catches high < low."""
-        client = self.create_mock_client()
-        fetcher = PriceDataFetcher(client)
-
-        opens = [100.0, 101.0]
-        highs = [102.0, 99.0]  # High < Low
-        lows = [99.0, 100.0]
-        closes = [101.0, 100.5]
-
-        with pytest.raises(ValueError, match="High < Low"):
-            fetcher._validate_price_data(opens, highs, lows, closes)
 
     def test_fetch_multiple_windows(self):
         """Test fetching multiple lookback windows."""
         client = self.create_mock_client()
         fetcher = PriceDataFetcher(client, enable_cache=False)
 
-        # Mock API response
-        mock_response = Mock()
-        mock_response.json.return_value = self.create_mock_candle_response(252)
-        mock_response.raise_for_status = Mock()
-        client.session.get.return_value = mock_response
+        # Mock client.get_candle_data to return different data for different windows
+        def mock_get_candle_data(symbol, lookback_days, resolution):
+            return self.create_mock_price_data(lookback_days)
+
+        client.get_candle_data.side_effect = mock_get_candle_data
 
         results = fetcher.fetch_multiple_windows("F", windows=[20, 60])
 
@@ -362,14 +288,108 @@ class TestPriceDataFetcher:
         client = self.create_mock_client()
         fetcher = PriceDataFetcher(client, enable_cache=False)
 
-        mock_response = Mock()
-        mock_response.json.return_value = self.create_mock_candle_response(20)
-        mock_response.raise_for_status = Mock()
-        client.session.get.return_value = mock_response
+        mock_price_data = self.create_mock_price_data(20)
+        client.get_candle_data.return_value = mock_price_data
 
         # Fetch with lowercase symbol
-        price_data = fetcher.fetch_price_data("aapl", lookback_days=20)
+        fetcher.fetch_price_data("aapl", lookback_days=20)
 
-        # Verify API was called with uppercase
-        call_args = client.session.get.call_args
-        assert call_args[1]["params"]["symbol"] == "AAPL"
+        # Verify client was called with uppercase
+        client.get_candle_data.assert_called_once_with("AAPL", 20, "D")
+
+
+class TestAlphaVantagePriceDataFetcher:
+    """Test suite for AlphaVantagePriceDataFetcher class."""
+
+    def create_mock_client(self):
+        """Create a mock AlphaVantageClient."""
+        from src.alphavantage_client import AlphaVantageClient
+        client = Mock(spec=AlphaVantageClient)
+        client.config = Mock()
+        client.config.base_url = "https://www.alphavantage.co/query"
+        client.config.api_key = "test_key"
+        client.DAILY_LIMIT = 25
+        client.MAX_LOOKBACK_DAYS = 100
+        return client
+
+    def create_mock_price_data(self, n_days=60):
+        """Create mock PriceData."""
+        dates = [f"2026-01-{str(i+1).zfill(2)}" for i in range(n_days)]
+        return PriceData(
+            dates=dates,
+            opens=[100.0 + i * 0.1 for i in range(n_days)],
+            highs=[102.0 + i * 0.1 for i in range(n_days)],
+            lows=[99.0 + i * 0.1 for i in range(n_days)],
+            closes=[101.0 + i * 0.1 for i in range(n_days)],
+            volumes=[1000000 + i * 1000 for i in range(n_days)],
+            adjusted_closes=None,
+            dividends=None,
+            split_coefficients=None
+        )
+
+    def test_fetcher_initialization_with_client(self):
+        """Test fetcher initialization with client."""
+        client = self.create_mock_client()
+        fetcher = AlphaVantagePriceDataFetcher(client)
+
+        assert fetcher._client == client
+        assert fetcher.enable_cache is True
+
+    def test_fetch_price_data_success(self):
+        """Test successful price data fetch."""
+        client = self.create_mock_client()
+        fetcher = AlphaVantagePriceDataFetcher(client, enable_cache=False)
+
+        mock_price_data = self.create_mock_price_data(60)
+        client.fetch_daily_prices.return_value = mock_price_data
+
+        price_data = fetcher.fetch_price_data("F", lookback_days=60)
+
+        assert isinstance(price_data, PriceData)
+        assert len(price_data.dates) == 60
+        client.fetch_daily_prices.assert_called_once_with("F", 60)
+
+    def test_fetch_price_data_uses_cache(self):
+        """Test that fetcher uses cached data."""
+        client = self.create_mock_client()
+        fetcher = AlphaVantagePriceDataFetcher(client, enable_cache=True)
+
+        mock_price_data = self.create_mock_price_data(60)
+        client.fetch_daily_prices.return_value = mock_price_data
+
+        # First fetch
+        fetcher.fetch_price_data("F", lookback_days=60)
+        assert client.fetch_daily_prices.call_count == 1
+
+        # Second fetch - should use cache
+        fetcher.fetch_price_data("F", lookback_days=60)
+        assert client.fetch_daily_prices.call_count == 1
+
+    def test_get_usage_status(self):
+        """Test getting API usage status."""
+        client = self.create_mock_client()
+        client.get_usage_status.return_value = {
+            "calls_today": 5,
+            "daily_limit": 25,
+            "remaining": 20,
+            "percentage_used": 20.0
+        }
+
+        fetcher = AlphaVantagePriceDataFetcher(client)
+        status = fetcher.get_usage_status()
+
+        assert status["calls_today"] == 5
+        assert status["remaining"] == 20
+        client.get_usage_status.assert_called_once()
+
+    def test_symbol_normalization(self):
+        """Test that symbols are normalized to uppercase."""
+        client = self.create_mock_client()
+        fetcher = AlphaVantagePriceDataFetcher(client, enable_cache=False)
+
+        mock_price_data = self.create_mock_price_data(20)
+        client.fetch_daily_prices.return_value = mock_price_data
+
+        fetcher.fetch_price_data("aapl", lookback_days=20)
+
+        client.fetch_daily_prices.assert_called_once_with("AAPL", 20)
