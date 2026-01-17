@@ -4,6 +4,8 @@ End-to-end example: Complete volatility calculation pipeline with live data.
 
 This example demonstrates:
 1. Fetching historical price data from Alpha Vantage (FREE tier)
+   - Uses TIME_SERIES_DAILY for OHLC + volume
+   - Note: Dividends/splits require premium TIME_SERIES_DAILY_ADJUSTED
 2. Fetching options chain from Finnhub (FREE tier)
 3. Extracting implied volatility
 4. Calculating realized volatility (multiple methods)
@@ -19,6 +21,7 @@ API Documentation:
 - Finnhub: https://finnhub.io/docs/api
 """
 
+from src.cache import LocalFileCache
 from src.config import FinnhubConfig, AlphaVantageConfig
 from src.finnhub_client import FinnhubClient
 from src.options_service import OptionsChainService
@@ -49,15 +52,37 @@ def main():
         av_config = AlphaVantageConfig.from_file()
         print("✓ Alpha Vantage configuration loaded")
 
-        price_fetcher = AlphaVantagePriceDataFetcher(av_config, enable_cache=True)
+        # Initialize file cache for persistent storage and API usage tracking
+        file_cache = LocalFileCache()
+        price_fetcher = AlphaVantagePriceDataFetcher(
+            av_config,
+            enable_cache=True,
+            file_cache=file_cache
+        )
 
-        # Fetch 60 days of price data
-        price_data = price_fetcher.fetch_price_data(symbol, lookback_days=60)
+        # Show API usage status
+        usage = price_fetcher.get_usage_status()
+        print(f"  API Usage Today: {usage['calls_today']}/{usage['daily_limit']} "
+              f"({usage['remaining']} remaining)")
+
+        # Fetch maximum available price data (100 days for free tier)
+        # This ensures sufficient history for 60-day volatility calculations
+        price_data = price_fetcher.fetch_price_data(
+            symbol,
+            lookback_days=price_fetcher.MAX_LOOKBACK_DAYS
+        )
 
         print(f"\n✓ Fetched {len(price_data.dates)} days of price data")
         print(f"  Period: {price_data.dates[0]} to {price_data.dates[-1]}")
         print(f"  Latest Close: ${price_data.closes[-1]:.2f}")
         print(f"  Price Range: ${min(price_data.closes):.2f} - ${max(price_data.closes):.2f}")
+
+        # Note: Dividend and split data requires premium API (TIME_SERIES_DAILY_ADJUSTED)
+        # With free tier (TIME_SERIES_DAILY), these fields are not available
+        if price_data.dividends is None:
+            print("  Dividends: N/A (requires premium API)")
+        if price_data.split_coefficients is None:
+            print("  Stock Splits: N/A (requires premium API)")
 
         # Step 2: Calculate realized volatility
         print("\n" + "-" * 70)

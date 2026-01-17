@@ -9,8 +9,10 @@ This module provides two data source options:
    - Free tier will return 403 Forbidden error
 
 2. **Alpha Vantage API** (Free tier available)
-   - Uses TIME_SERIES_DAILY endpoint (non-premium)
-   - Free tier: 25 requests/day
+   - Uses TIME_SERIES_DAILY endpoint (free tier)
+   - Returns OHLC data with volume
+   - Free tier limits: 25 requests/day, max 100 data points per request
+   - Note: Adjusted close, dividends, and splits require premium (TIME_SERIES_DAILY_ADJUSTED)
    - API docs: https://www.alphavantage.co/documentation/
    - Get API key: https://www.alphavantage.co/support/#api-key
 
@@ -21,10 +23,18 @@ Usage:
 
     # Option 2: Alpha Vantage (free tier, recommended)
     from src.config import AlphaVantageConfig
+    from src.cache import LocalFileCache
     from src.price_fetcher import AlphaVantagePriceDataFetcher
+
     config = AlphaVantageConfig.from_file()
-    fetcher = AlphaVantagePriceDataFetcher(config)
+    file_cache = LocalFileCache()  # Optional: for persistent caching
+    fetcher = AlphaVantagePriceDataFetcher(config, file_cache=file_cache)
     price_data = fetcher.fetch_price_data("AAPL", lookback_days=60)
+
+    # Note: dividend and split data requires premium API (TIME_SERIES_DAILY_ADJUSTED)
+    # With free tier (TIME_SERIES_DAILY), these will be None
+    print(price_data.dividends)          # None (requires premium)
+    print(price_data.split_coefficients) # None (requires premium)
 
 Both fetchers return PriceData objects compatible with the volatility calculator.
 """
@@ -429,29 +439,46 @@ class PriceDataFetcher:
             self.cache.clear()
 
 
+class AlphaVantageRateLimitError(Exception):
+    """Exception raised when Alpha Vantage daily rate limit is exceeded."""
+
+    pass
+
+
 class AlphaVantagePriceDataFetcher:
     """
     Fetcher for historical price data using Alpha Vantage API.
 
-    Uses the TIME_SERIES_DAILY endpoint (non-premium).
+    Uses the TIME_SERIES_DAILY endpoint for OHLC + volume.
     API documentation: https://www.alphavantage.co/documentation/
 
-    Free tier limits: 25 requests/day.
+    Free tier limits:
+    - 25 requests/day
+    - Max 100 data points per request (outputsize=compact)
+    - outputsize=full requires premium subscription
+
+    Note: Adjusted close, dividends, and splits require TIME_SERIES_DAILY_ADJUSTED
+    which is a premium-only endpoint.
     """
+
+    DAILY_LIMIT = 25  # Free tier daily API call limit
+    MAX_LOOKBACK_DAYS = 100  # Free tier max data points (compact output)
 
     def __init__(
         self,
         config: "AlphaVantageConfig",
         cache: Optional[PriceDataCache] = None,
-        enable_cache: bool = True
+        enable_cache: bool = True,
+        file_cache: Optional["LocalFileCache"] = None
     ):
         """
         Initialize Alpha Vantage price data fetcher.
 
         Args:
             config: AlphaVantageConfig instance with API credentials
-            cache: Optional cache instance (creates new if None)
+            cache: Optional in-memory cache instance (creates new if None)
             enable_cache: Whether to use caching (default: True)
+            file_cache: Optional LocalFileCache for persistent storage and usage tracking
         """
         # Import here to avoid circular imports
         from .config import AlphaVantageConfig
@@ -459,14 +486,16 @@ class AlphaVantagePriceDataFetcher:
         self.config = config
         self.enable_cache = enable_cache
         self.cache = cache if cache is not None else PriceDataCache()
+        self._file_cache = file_cache
         self._session = requests.Session()
         self._session.headers.update({
             "Accept": "application/json",
-            "User-Agent": "AlphaVantagePriceDataFetcher/1.0"
+            "User-Agent": "AlphaVantagePriceDataFetcher/2.0"
         })
         logger.debug(
             f"AlphaVantagePriceDataFetcher initialized "
-            f"(caching={'enabled' if enable_cache else 'disabled'})"
+            f"(caching={'enabled' if enable_cache else 'disabled'}, "
+            f"file_cache={'enabled' if file_cache else 'disabled'})"
         )
 
     def fetch_price_data(
@@ -478,41 +507,80 @@ class AlphaVantagePriceDataFetcher:
         """
         Fetch historical price data for a symbol from Alpha Vantage.
 
+        Uses TIME_SERIES_DAILY to get OHLC + volume (free tier).
+
         Args:
             symbol: Stock ticker symbol (e.g., "F", "AAPL")
             lookback_days: Number of days of historical data (default: 60)
             resolution: Data resolution (only "D" for daily supported)
 
         Returns:
-            PriceData with OHLC data
+            PriceData with OHLC data and volumes.
+            Note: adjusted_closes, dividends, split_coefficients will be None
+            (require premium TIME_SERIES_DAILY_ADJUSTED endpoint)
 
         Raises:
             ValueError: If response is invalid or empty
+            AlphaVantageRateLimitError: If daily rate limit exceeded
             FinnhubAPIError: If API call fails
         """
         symbol = symbol.upper()
 
-        # Check cache first
+        # Check in-memory cache first
         if self.enable_cache:
             cached_data = self.cache.get(symbol, lookback_days)
             if cached_data is not None:
-                logger.info(f"Using cached price data for {symbol} ({lookback_days} days)")
+                logger.info(f"Using in-memory cached price data for {symbol}")
                 return cached_data
+
+        # Check file-based cache (24-hour TTL for price data)
+        file_cache_key = f"price_daily_{symbol}"
+        if self._file_cache:
+            cached_response = self._file_cache.get(file_cache_key, max_age_hours=24.0)
+            if cached_response:
+                logger.info(f"Using file-cached price data for {symbol}")
+                price_data = self._parse_daily_response(
+                    cached_response, symbol, lookback_days
+                )
+                if self.enable_cache:
+                    self.cache.set(symbol, lookback_days, price_data)
+                return price_data
+
+        # Check API usage before making request
+        if self._file_cache:
+            usage = self._file_cache.get_alpha_vantage_usage_today()
+            if usage >= self.DAILY_LIMIT:
+                raise AlphaVantageRateLimitError(
+                    f"Alpha Vantage daily limit reached ({usage}/{self.DAILY_LIMIT}). "
+                    "Resets at midnight. Consider using cached data."
+                )
+            remaining = self.DAILY_LIMIT - usage
+            if remaining <= 5:
+                logger.warning(
+                    f"Alpha Vantage API: {remaining} calls remaining today"
+                )
+
+        # Free tier limitation: compact returns max 100 data points
+        # full output requires premium subscription
+        if lookback_days > self.MAX_LOOKBACK_DAYS:
+            logger.warning(
+                f"Requested {lookback_days} days but free tier is limited to "
+                f"{self.MAX_LOOKBACK_DAYS} days. Capping request."
+            )
+            lookback_days = self.MAX_LOOKBACK_DAYS
 
         logger.info(
             f"Fetching {lookback_days} days of price data for {symbol} "
-            f"from Alpha Vantage"
+            f"from Alpha Vantage (TIME_SERIES_DAILY)"
         )
 
-        # Determine output size - use 'full' for > 100 days, 'compact' otherwise
-        output_size = "full" if lookback_days > 100 else "compact"
-
-        # Build API request
+        # Always use compact for free tier (max 100 data points)
+        # outputsize=full requires premium subscription
         params = {
             "function": "TIME_SERIES_DAILY",
             "symbol": symbol,
             "apikey": self.config.api_key,
-            "outputsize": output_size
+            "outputsize": "compact"
         }
 
         try:
@@ -531,13 +599,18 @@ class AlphaVantagePriceDataFetcher:
         except requests.exceptions.RequestException as e:
             raise FinnhubAPIError(f"API request failed: {e}")
 
+        # Increment usage counter after successful request
+        if self._file_cache:
+            new_usage = self._file_cache.increment_alpha_vantage_usage()
+            logger.debug(f"Alpha Vantage API usage today: {new_usage}/{self.DAILY_LIMIT}")
+
         # Check for API errors
         if "Error Message" in data:
             raise ValueError(f"Alpha Vantage API error: {data['Error Message']}")
 
         if "Note" in data:
             # Rate limit message
-            raise FinnhubAPIError(
+            raise AlphaVantageRateLimitError(
                 f"Alpha Vantage rate limit: {data['Note']}"
             )
 
@@ -547,7 +620,38 @@ class AlphaVantagePriceDataFetcher:
                 f"Alpha Vantage API info: {data['Information']}"
             )
 
+        # Cache raw response to file (for future use without API call)
+        if self._file_cache:
+            self._file_cache.set(file_cache_key, data)
+
         # Parse the response
+        price_data = self._parse_daily_response(data, symbol, lookback_days)
+
+        # Cache in memory
+        if self.enable_cache:
+            self.cache.set(symbol, lookback_days, price_data)
+
+        return price_data
+
+    def _parse_daily_response(
+        self,
+        data: Dict[str, Any],
+        symbol: str,
+        lookback_days: int
+    ) -> PriceData:
+        """
+        Parse TIME_SERIES_DAILY response into PriceData.
+
+        Args:
+            data: Raw API response dictionary
+            symbol: Stock ticker symbol
+            lookback_days: Number of days requested
+
+        Returns:
+            PriceData with OHLC and volume.
+            adjusted_closes, dividends, split_coefficients are set to None
+            (require premium TIME_SERIES_DAILY_ADJUSTED endpoint)
+        """
         time_series = data.get("Time Series (Daily)")
         if not time_series:
             raise ValueError(f"No price data available for {symbol} from Alpha Vantage")
@@ -573,6 +677,7 @@ class AlphaVantagePriceDataFetcher:
             highs.append(round(float(day_data["2. high"]), 2))
             lows.append(round(float(day_data["3. low"]), 2))
             closes.append(round(float(day_data["4. close"]), 2))
+            # TIME_SERIES_DAILY uses "5. volume"
             volumes.append(int(float(day_data["5. volume"])))
 
         logger.info(
@@ -583,20 +688,20 @@ class AlphaVantagePriceDataFetcher:
         # Validate data
         self._validate_price_data(opens, highs, lows, closes)
 
-        price_data = PriceData(
+        # Note: adjusted_closes, dividends, split_coefficients are None
+        # because TIME_SERIES_DAILY (free tier) doesn't include them.
+        # Premium TIME_SERIES_DAILY_ADJUSTED is required for that data.
+        return PriceData(
             dates=dates,
             opens=opens,
             highs=highs,
             lows=lows,
             closes=closes,
-            volumes=volumes
+            adjusted_closes=None,
+            volumes=volumes,
+            dividends=None,
+            split_coefficients=None
         )
-
-        # Cache the result
-        if self.enable_cache:
-            self.cache.set(symbol, lookback_days, price_data)
-
-        return price_data
 
     def _validate_price_data(
         self,
@@ -653,6 +758,29 @@ class AlphaVantagePriceDataFetcher:
             self.cache.clear_symbol(symbol.upper())
         else:
             self.cache.clear()
+
+    def get_usage_status(self) -> Dict[str, Any]:
+        """
+        Get current Alpha Vantage API usage status.
+
+        Returns:
+            Dictionary with usage information:
+            - calls_today: Number of API calls made today
+            - daily_limit: Maximum allowed calls per day
+            - remaining: Calls remaining today
+            - percentage_used: Percentage of daily limit used
+        """
+        if self._file_cache:
+            usage = self._file_cache.get_alpha_vantage_usage_today()
+        else:
+            usage = 0
+
+        return {
+            "calls_today": usage,
+            "daily_limit": self.DAILY_LIMIT,
+            "remaining": self.DAILY_LIMIT - usage,
+            "percentage_used": (usage / self.DAILY_LIMIT) * 100
+        }
 
     def close(self) -> None:
         """Close the HTTP session."""

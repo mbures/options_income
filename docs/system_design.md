@@ -150,9 +150,10 @@ class AlphaVantageClient:
                 "Resets at midnight. Consider using cached data or upgrading plan."
             )
         
-        # Make API call
+        # Make API call (using TIME_SERIES_DAILY for free tier)
+        # Note: TIME_SERIES_DAILY_ADJUSTED requires premium subscription
         params = {
-            "function": "TIME_SERIES_DAILY_ADJUSTED",
+            "function": "TIME_SERIES_DAILY",
             "symbol": symbol,
             "outputsize": outputsize,
             "apikey": self.config.api_key
@@ -176,21 +177,21 @@ class AlphaVantageClient:
         self.cache.increment_alpha_vantage_usage()
         
         # Parse response
-        price_history = self._parse_daily_adjusted_response(data, symbol)
+        price_history = self._parse_daily_response(data, symbol)
         
         # Cache the raw response
         self.cache.set(cache_key, data)
         
         return price_history
     
-    def _parse_daily_adjusted_response(
+    def _parse_daily_response(
         self,
         data: Dict[str, Any],
         symbol: str
     ) -> PriceHistory:
-        """Parse TIME_SERIES_DAILY_ADJUSTED response into PriceHistory."""
+        """Parse TIME_SERIES_DAILY response into PriceHistory."""
         time_series = data.get("Time Series (Daily)", {})
-        
+
         bars = []
         for date_str, values in time_series.items():
             bar = PriceBar(
@@ -199,13 +200,15 @@ class AlphaVantageClient:
                 high=float(values["2. high"]),
                 low=float(values["3. low"]),
                 close=float(values["4. close"]),
-                adjusted_close=float(values["5. adjusted close"]),
-                volume=int(values["6. volume"]),
-                dividend=float(values.get("7. dividend amount", 0)),
-                split_coefficient=float(values.get("8. split coefficient", 1.0))
+                volume=int(values["5. volume"]),
+                # Note: adjusted_close, dividend, split_coefficient
+                # require premium TIME_SERIES_DAILY_ADJUSTED
+                adjusted_close=None,
+                dividend=None,
+                split_coefficient=None
             )
             bars.append(bar)
-        
+
         return PriceHistory(
             symbol=symbol,
             bars=bars,
@@ -239,11 +242,12 @@ class AlphaVantageRateLimitError(AlphaVantageAPIError):
 ```
 
 **Design Decisions**:
-- Use `TIME_SERIES_DAILY_ADJUSTED` as primary endpoint (most data per call)
-- Cache-first pattern to minimize API calls
+- Use `TIME_SERIES_DAILY` for free tier (OHLC + volume)
+- `TIME_SERIES_DAILY_ADJUSTED` (dividends/splits) requires premium subscription
+- Cache-first pattern to minimize API calls (24-hour TTL)
 - Track daily usage with clear warnings
-- Parse dividends and splits from response (no separate API call needed)
 - Clear separation of rate limit errors from other API errors
+- Known limitation: Stock splits within 100-day window may affect volatility accuracy
 
 ---
 

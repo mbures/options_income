@@ -159,18 +159,20 @@ A Python application that interfaces with Finnhub and Alpha Vantage APIs to:
 - Validate API key before making requests
 
 **FR-7: Historical Price Data Retrieval**
-- Use endpoint: `TIME_SERIES_DAILY_ADJUSTED`
-- Retrieve OHLC data with adjusted close, dividend, and split information
+- Use endpoint: `TIME_SERIES_DAILY` (free tier)
+- Retrieve OHLC data with volume
 - Support `outputsize=compact` (100 days) for routine updates
-- Support `outputsize=full` (20+ years) for initial historical load
-- Parse response into standard OHLC structure with dividend data
+- Parse response into standard OHLC structure
+- **Note**: `TIME_SERIES_DAILY_ADJUSTED` (with dividends/splits) requires premium subscription
+- **Limitation**: Volatility calculations use unadjusted closes; rare splits within 100-day window may affect accuracy
 
 **FR-8: Alpha Vantage API Efficiency**
 - **Critical**: Pack API calls as densely as possible due to daily limits
 - Free tier: 25 requests/day limit
-- Use `TIME_SERIES_DAILY_ADJUSTED` to get OHLC + dividends + splits in single call
-- Initial load: Fetch full history once, then daily incremental updates
+- Use `TIME_SERIES_DAILY` to get OHLC + volume (free tier)
+- Cache aggressively (24-hour TTL for price data)
 - Target: 1 Alpha Vantage call per ticker per day after initial load
+- **Note**: Dividend/split data requires premium `TIME_SERIES_DAILY_ADJUSTED`
 
 **FR-9: Alpha Vantage Rate Limit Management**
 - Enforce daily call limit (25/day free tier)
@@ -564,15 +566,16 @@ A Python application that interfaces with Finnhub and Alpha Vantage APIs to:
 
 #### 5.2.2 Alpha Vantage Endpoints
 
-| Endpoint | Purpose | Rate Limit |
-|----------|---------|------------|
-| `TIME_SERIES_DAILY_ADJUSTED` | OHLC + dividends + splits | 25/day (free) |
+| Endpoint | Purpose | Rate Limit | Tier |
+|----------|---------|------------|------|
+| `TIME_SERIES_DAILY` | OHLC + volume | 25/day | Free |
+| `TIME_SERIES_DAILY_ADJUSTED` | OHLC + dividends + splits | 25/day | Premium |
 
-**TIME_SERIES_DAILY_ADJUSTED Response Structure** (partial):
+**TIME_SERIES_DAILY Response Structure** (free tier):
 ```json
 {
   "Meta Data": {
-    "1. Information": "Daily Time Series with Splits and Dividend Events",
+    "1. Information": "Daily Prices (open, high, low, close) and Volumes",
     "2. Symbol": "F",
     "3. Last Refreshed": "2026-01-15"
   },
@@ -582,14 +585,13 @@ A Python application that interfaces with Finnhub and Alpha Vantage APIs to:
       "2. high": "10.75",
       "3. low": "10.40",
       "4. close": "10.65",
-      "5. adjusted close": "10.65",
-      "6. volume": "45000000",
-      "7. dividend amount": "0.00",
-      "8. split coefficient": "1.0"
+      "5. volume": "45000000"
     }
   }
 }
 ```
+
+**Note**: `TIME_SERIES_DAILY_ADJUSTED` (with adjusted close, dividends, splits) requires premium subscription.
 
 ### 5.3 Data Requirements
 
@@ -602,10 +604,12 @@ A Python application that interfaces with Finnhub and Alpha Vantage APIs to:
 | high | float | Yes | Alpha Vantage | Daily high |
 | low | float | Yes | Alpha Vantage | Daily low |
 | close | float | Yes | Alpha Vantage | Closing price |
-| adjusted_close | float | Yes | Alpha Vantage | Split/dividend adjusted close |
-| volume | int | No | Alpha Vantage | Trading volume |
-| dividend | float | Yes | Alpha Vantage | Dividend amount (0 if none) |
-| split_coefficient | float | Yes | Alpha Vantage | Split ratio (1.0 if none) |
+| volume | int | Yes | Alpha Vantage | Trading volume |
+| adjusted_close | float | No* | Alpha Vantage | Split/dividend adjusted close |
+| dividend | float | No* | Alpha Vantage | Dividend amount (0 if none) |
+| split_coefficient | float | No* | Alpha Vantage | Split ratio (1.0 if none) |
+
+*Premium only: adjusted_close, dividend, and split_coefficient require `TIME_SERIES_DAILY_ADJUSTED` (premium subscription)
 
 **Data Window Requirements**:
 
@@ -1102,7 +1106,8 @@ The following ML enhancements are documented for future consideration but are **
 | Finnhub | Options Chain | 60/min | Per-session |
 | Finnhub | Quote | 60/min | Per-session |
 | Finnhub | Earnings Calendar | 60/min | Weekly cache |
-| Alpha Vantage | TIME_SERIES_DAILY_ADJUSTED | 25/day | Daily cache, initial full load |
+| Alpha Vantage | TIME_SERIES_DAILY | 25/day | Daily cache (24h TTL) |
+| Alpha Vantage | TIME_SERIES_DAILY_ADJUSTED | 25/day | Premium only |
 
 ### E. References
 

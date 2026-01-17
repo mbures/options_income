@@ -4,6 +4,9 @@ config/finhub_api_key.txt
 finhub_api_key.txt
 alpha_vantage_api_key.txt
 
+# Cache directory
+cache/
+
 # Python Virtual Environments
 venv/
 env/

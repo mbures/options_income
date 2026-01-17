@@ -130,6 +130,9 @@ class PriceData:
         lows: Low prices
         closes: Closing prices
         volumes: Trading volumes (optional)
+        adjusted_closes: Split/dividend adjusted closing prices (optional)
+        dividends: Dividend amounts per day (0 if none) (optional)
+        split_coefficients: Split ratios per day (1.0 if none) (optional)
     """
     dates: List[str]
     closes: List[float]
@@ -137,6 +140,9 @@ class PriceData:
     highs: Optional[List[float]] = None
     lows: Optional[List[float]] = None
     volumes: Optional[List[int]] = None
+    adjusted_closes: Optional[List[float]] = None
+    dividends: Optional[List[float]] = None
+    split_coefficients: Optional[List[float]] = None
 
     def __post_init__(self) -> None:
         """Validate data consistency."""
@@ -152,6 +158,12 @@ class PriceData:
             raise ValueError("lows must match dates length")
         if self.volumes is not None and len(self.volumes) != n:
             raise ValueError("volumes must match dates length")
+        if self.adjusted_closes is not None and len(self.adjusted_closes) != n:
+            raise ValueError("adjusted_closes must match dates length")
+        if self.dividends is not None and len(self.dividends) != n:
+            raise ValueError("dividends must match dates length")
+        if self.split_coefficients is not None and len(self.split_coefficients) != n:
+            raise ValueError("split_coefficients must match dates length")
 
         # Validate price data
         if any(c <= 0 for c in self.closes):
