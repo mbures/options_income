@@ -20,7 +20,7 @@ This document tracks the implementation progress of the Covered Options Strategy
 | Phase 1 | Core Data Infrastructure | ✅ Complete | 100% |
 | Phase 2 | Volatility Engine | ✅ Complete | 100% |
 | Phase 3 | Alpha Vantage Integration & Caching | ✅ Complete | 100% |
-| Phase 4 | Strike Optimization | ⬜ Not Started | 0% |
+| Phase 4 | Strike Optimization | ✅ Complete | 100% |
 | Phase 5 | Covered Options Strategies | ⬜ Not Started | 0% |
 | Phase 6 | Ladder Builder | ⬜ Not Started | 0% |
 | Phase 7 | Risk Analysis & Polish | ⬜ Not Started | 0% |
@@ -65,49 +65,49 @@ This document tracks the implementation progress of the Covered Options Strategy
 
 ---
 
-### Sprint 2: Phase 4 - Strike Optimization (Est. 10 story points)
+### Sprint 2: Phase 4 - Strike Optimization (Est. 10 story points) ✅ COMPLETE
 
 **Goal**: Implement complete strike optimization module with sigma-based calculations and assignment probability.
 
-#### S2.1: Strike-at-Sigma Calculator (3 pts)
-- [ ] **S2.1.1**: Create `src/strike_optimizer.py` module
-- [ ] **S2.1.2**: Implement `StrikeOptimizer` class
-- [ ] **S2.1.3**: Implement `calculate_strike_at_sigma()` method using formula: K = S × exp(n × σ × √T)
-- [ ] **S2.1.4**: Support both call (positive n) and put (negative n) strikes
-- [ ] **S2.1.5**: Create `StrikeResult` dataclass for results
-- [ ] **S2.1.6**: Add unit tests with mathematical verification
+#### S2.1: Strike-at-Sigma Calculator (3 pts) ✅
+- [x] **S2.1.1**: Create `src/strike_optimizer.py` module
+- [x] **S2.1.2**: Implement `StrikeOptimizer` class
+- [x] **S2.1.3**: Implement `calculate_strike_at_sigma()` method using formula: K = S × exp(n × σ × √T)
+- [x] **S2.1.4**: Support both call (positive n) and put (negative n) strikes
+- [x] **S2.1.5**: Create `StrikeResult` dataclass for results
+- [x] **S2.1.6**: Add unit tests with mathematical verification
 
 **PRD Requirements**: FR-22
 
-#### S2.2: Strike Rounding to Tradeable Strikes (2 pts)
-- [ ] **S2.2.1**: Implement `round_to_tradeable_strike()` method
-- [ ] **S2.2.2**: Support different strike increments ($0.50, $1.00, $2.50, $5.00)
-- [ ] **S2.2.3**: Implement conservative rounding (calls: round up, puts: round down)
-- [ ] **S2.2.4**: Integration with options chain for available strikes
-- [ ] **S2.2.5**: Unit tests for rounding logic
+#### S2.2: Strike Rounding to Tradeable Strikes (2 pts) ✅
+- [x] **S2.2.1**: Implement `round_to_tradeable_strike()` method
+- [x] **S2.2.2**: Support different strike increments ($0.50, $1.00, $2.50, $5.00)
+- [x] **S2.2.3**: Implement conservative rounding (calls: round up, puts: round down)
+- [x] **S2.2.4**: Integration with options chain for available strikes
+- [x] **S2.2.5**: Unit tests for rounding logic
 
 **PRD Requirements**: FR-23
 
-#### S2.3: Assignment Probability Calculator (3 pts)
-- [ ] **S2.3.1**: Implement `calculate_assignment_probability()` method
-- [ ] **S2.3.2**: Implement Black-Scholes N(-d2) for calls, N(d2) for puts
-- [ ] **S2.3.3**: Create `_norm_cdf()` helper using `math.erf`
-- [ ] **S2.3.4**: Return delta as proxy for instantaneous probability
-- [ ] **S2.3.5**: Create `ProbabilityResult` dataclass
-- [ ] **S2.3.6**: Validate against option chain delta values
+#### S2.3: Assignment Probability Calculator (3 pts) ✅
+- [x] **S2.3.1**: Implement `calculate_assignment_probability()` method
+- [x] **S2.3.2**: Implement Black-Scholes N(-d2) for calls, N(d2) for puts
+- [x] **S2.3.3**: Create `_norm_cdf()` helper using `math.erf`
+- [x] **S2.3.4**: Return delta as proxy for instantaneous probability
+- [x] **S2.3.5**: Create `ProbabilityResult` dataclass
+- [x] **S2.3.6**: Validate against option chain delta values
 
 **PRD Requirements**: FR-24
 
-#### S2.4: Strike Profile Presets and Recommendations (2 pts)
-- [ ] **S2.4.1**: Create `StrikeProfile` enum (Aggressive, Moderate, Conservative, Defensive)
-- [ ] **S2.4.2**: Define sigma ranges for each profile:
+#### S2.4: Strike Profile Presets and Recommendations (2 pts) ✅
+- [x] **S2.4.1**: Create `StrikeProfile` enum (Aggressive, Moderate, Conservative, Defensive)
+- [x] **S2.4.2**: Define sigma ranges for each profile:
   - Aggressive: 0.5-1.0σ (30-40% P(ITM))
   - Moderate: 1.0-1.5σ (15-30% P(ITM))
   - Conservative: 1.5-2.0σ (7-15% P(ITM))
   - Defensive: 2.0-2.5σ (2-7% P(ITM))
-- [ ] **S2.4.3**: Implement `get_strike_recommendations()` method
-- [ ] **S2.4.4**: Add liquidity filtering (OI > threshold, spread < threshold)
-- [ ] **S2.4.5**: Return ranked recommendations with full metrics
+- [x] **S2.4.3**: Implement `get_strike_recommendations()` method
+- [x] **S2.4.4**: Add liquidity filtering (OI > threshold, spread < threshold)
+- [x] **S2.4.5**: Return ranked recommendations with full metrics
 
 **PRD Requirements**: FR-25, FR-26
 
@@ -301,11 +301,11 @@ This document tracks the implementation progress of the Covered Options Strategy
 | `src/options_service.py` | 73% | 90% | |
 | `src/volatility.py` | 90% | 95% | |
 | `src/price_fetcher.py` | 53% | 95% | Needs more tests for new features |
-| `src/strike_optimizer.py` | N/A | 90% | Not yet created |
+| `src/strike_optimizer.py` | 91% | 90% | ✅ Exceeds target |
 | `src/covered_strategies.py` | N/A | 90% | Not yet created |
 | `src/ladder_builder.py` | N/A | 90% | Not yet created |
 | `src/risk_analyzer.py` | N/A | 90% | Not yet created |
-| **Overall** | 63% | **>90%** | 160 tests passing |
+| **Overall** | 67% | **>90%** | 219 tests passing |
 
 ---
 
@@ -340,12 +340,12 @@ This document tracks the implementation progress of the Covered Options Strategy
 
 | # | Criterion | Status |
 |---|-----------|--------|
-| AC-16 | Calculate strike at N sigma accurately | ⬜ |
-| AC-17 | Round to nearest tradeable strike | ⬜ |
-| AC-18 | Calculate assignment probability (calls) | ⬜ |
-| AC-19 | Calculate assignment probability (puts) | ⬜ |
-| AC-20 | Filter by liquidity thresholds | ⬜ |
-| AC-21 | Return ranked recommendations | ⬜ |
+| AC-16 | Calculate strike at N sigma accurately | ✅ |
+| AC-17 | Round to nearest tradeable strike | ✅ |
+| AC-18 | Calculate assignment probability (calls) | ✅ |
+| AC-19 | Calculate assignment probability (puts) | ✅ |
+| AC-20 | Filter by liquidity thresholds | ✅ |
+| AC-21 | Return ranked recommendations | ✅ |
 
 ### Covered Options Strategies (AC-22 to AC-25)
 
@@ -390,9 +390,11 @@ This document tracks the implementation progress of the Covered Options Strategy
 
 ## Notes
 
-- All tests currently pass (133 tests)
+- All tests currently pass (219 tests)
 - Basic end-to-end workflow functional (`example_end_to_end.py`)
-- Sprint 1 should be prioritized to complete Phase 3 before moving to new modules
+- Sprint 2 complete: Strike Optimization module with 51 new tests
+- Fixed critical IV conversion bug (Finnhub returns IV as percentage, not decimal)
+- Cache system refactored to unified `market_data` table
 - Each sprint deliverable should include updated unit tests
 
 ---
@@ -403,3 +405,4 @@ This document tracks the implementation progress of the Covered Options Strategy
 |---------|------|--------|---------|
 | 1.0 | 2026-01-15 | Software Developer | Initial implementation plan |
 | 1.1 | 2026-01-16 | Software Developer | Sprint 1 complete: LocalFileCache, TIME_SERIES_DAILY_ADJUSTED, API usage tracking |
+| 1.2 | 2026-01-18 | Software Developer | Sprint 2 complete: StrikeOptimizer module with sigma calculations, assignment probability, and strike recommendations. Fixed IV normalization bug. Cache refactored to unified market_data table. |

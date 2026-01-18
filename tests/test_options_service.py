@@ -220,6 +220,8 @@ class TestOptionsChainService:
 
     def test_parse_single_contract_all_fields(self, service):
         """Test parsing with all fields."""
+        # Note: Finnhub returns IV as percentage (35.0 = 35%), which gets
+        # normalized to decimal (0.35) for internal calculations
         data = {
             "strike": 10.0,
             "expirationDate": "2026-01-16",
@@ -234,7 +236,7 @@ class TestOptionsChainService:
             "theta": -0.05,
             "vega": 0.12,
             "rho": 0.03,
-            "impliedVolatility": 0.35
+            "impliedVolatility": 35.0  # Finnhub format: percentage
         }
 
         contract = service._parse_single_contract(data, "F")
@@ -242,7 +244,7 @@ class TestOptionsChainService:
         assert contract.bid == 1.25
         assert contract.volume == 1500
         assert contract.delta == 0.55
-        assert contract.implied_volatility == 0.35
+        assert contract.implied_volatility == 0.35  # Normalized to decimal
 
     def test_parse_single_contract_invalid_option_type(self, service):
         """Test that invalid option type raises error."""

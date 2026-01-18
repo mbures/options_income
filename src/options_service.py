@@ -261,8 +261,27 @@ class OptionsChainService:
             theta=self._safe_float(data.get("theta")),
             vega=self._safe_float(data.get("vega")),
             rho=self._safe_float(data.get("rho")),
-            implied_volatility=self._safe_float(data.get("impliedVolatility")),
+            implied_volatility=self._normalize_iv(data.get("impliedVolatility")),
         )
+
+    def _normalize_iv(self, value: Any) -> Optional[float]:
+        """
+        Normalize implied volatility to decimal form.
+
+        Finnhub returns IV as a percentage (e.g., 26.93 means 26.93%).
+        This method converts to decimal form (0.2693) for internal calculations.
+
+        Args:
+            value: Raw IV value from API
+
+        Returns:
+            IV as decimal (e.g., 0.2693), or None if invalid
+        """
+        raw_iv = self._safe_float(value)
+        if raw_iv is None:
+            return None
+        # Convert from percentage to decimal
+        return raw_iv / 100
 
     @staticmethod
     def _safe_float(value: Any) -> Optional[float]:

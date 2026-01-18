@@ -10,7 +10,9 @@ This example demonstrates:
 3. Extracting implied volatility
 4. Calculating realized volatility (multiple methods)
 5. Calculating blended volatility
-6. Complete integration workflow
+6. Volatility regime analysis
+7. Strike optimization with sigma-based calculations
+8. Strike recommendations with assignment probabilities
 
 Data Sources:
 - Historical OHLCV: Alpha Vantage TIME_SERIES_DAILY (free, 25 req/day)
@@ -31,6 +33,7 @@ from src.volatility_integration import (
     extract_atm_implied_volatility,
     calculate_iv_term_structure
 )
+from src.strike_optimizer import StrikeOptimizer, StrikeProfile
 
 
 def main():
@@ -253,6 +256,163 @@ def main():
 
             print(f"\nRecommended Volatility for Calculations:")
             print(f"  → Use Blended: {blended_result.volatility*100:.2f}%")
+
+            # Step 7: Strike Optimization
+            print("\n" + "-" * 70)
+            print("STEP 7: Strike Optimization (NEW)")
+            print("-" * 70)
+
+            optimizer = StrikeOptimizer()
+
+            # Get nearest expiration for calculations
+            expirations = options_chain.get_expirations()
+            nearest_exp = expirations[0] if expirations else None
+            profile_strikes = None
+            put_profile_strikes = None
+
+            if nearest_exp:
+                from datetime import datetime
+                try:
+                    exp_dt = datetime.fromisoformat(nearest_exp)
+                    days_to_expiry = max(1, (exp_dt - datetime.now()).days)
+                except (ValueError, TypeError):
+                    days_to_expiry = 30
+
+                print(f"\nUsing expiration: {nearest_exp} ({days_to_expiry} DTE)")
+                print(f"Using blended volatility: {blended_result.volatility*100:.2f}%")
+
+                # Calculate strikes for all risk profiles
+                print("\nCall Strikes by Risk Profile:")
+                print(f"{'Profile':<14} {'Sigma':>6} {'Strike':>8} {'P(ITM)':>8}")
+                print("-" * 40)
+
+                profile_strikes = optimizer.calculate_strikes_for_profiles(
+                    current_price=current_price,
+                    volatility=blended_result.volatility,
+                    days_to_expiry=days_to_expiry,
+                    option_type="call"
+                )
+
+                for profile in [StrikeProfile.AGGRESSIVE, StrikeProfile.MODERATE,
+                               StrikeProfile.CONSERVATIVE, StrikeProfile.DEFENSIVE]:
+                    result = profile_strikes[profile]
+                    prob_pct = result.assignment_probability * 100 if result.assignment_probability else 0
+                    print(
+                        f"{profile.value:<14} {result.sigma:>5.1f}σ "
+                        f"${result.tradeable_strike:>7.2f} "
+                        f"{prob_pct:>7.1f}%"
+                    )
+
+                # Display any warnings for call strikes
+                if profile_strikes.warnings:
+                    print("\n  ⚠ Call Strike Warnings:")
+                    for warning in profile_strikes.warnings:
+                        print(f"    • {warning}")
+
+                # Show put strikes as well
+                print("\nPut Strikes by Risk Profile:")
+                print(f"{'Profile':<14} {'Sigma':>6} {'Strike':>8} {'P(ITM)':>8}")
+                print("-" * 40)
+
+                put_profile_strikes = optimizer.calculate_strikes_for_profiles(
+                    current_price=current_price,
+                    volatility=blended_result.volatility,
+                    days_to_expiry=days_to_expiry,
+                    option_type="put"
+                )
+
+                for profile in [StrikeProfile.AGGRESSIVE, StrikeProfile.MODERATE,
+                               StrikeProfile.CONSERVATIVE, StrikeProfile.DEFENSIVE]:
+                    result = put_profile_strikes[profile]
+                    prob_pct = result.assignment_probability * 100 if result.assignment_probability else 0
+                    print(
+                        f"{profile.value:<14} {result.sigma:>5.1f}σ "
+                        f"${result.tradeable_strike:>7.2f} "
+                        f"{prob_pct:>7.1f}%"
+                    )
+
+                # Display any warnings for put strikes
+                if put_profile_strikes.warnings:
+                    print("\n  ⚠ Put Strike Warnings:")
+                    for warning in put_profile_strikes.warnings:
+                        print(f"    • {warning}")
+
+                # Step 8: Get actual recommendations from options chain
+                print("\n" + "-" * 70)
+                print("STEP 8: Strike Recommendations from Options Chain")
+                print("-" * 70)
+
+                # Get call recommendations
+                print("\nTop Call Strike Recommendations (Moderate Profile):")
+                call_recs = optimizer.get_strike_recommendations(
+                    options_chain=options_chain,
+                    current_price=current_price,
+                    volatility=blended_result.volatility,
+                    option_type="call",
+                    expiration_date=nearest_exp,
+                    profile=StrikeProfile.MODERATE,
+                    limit=3
+                )
+
+                if call_recs:
+                    print(f"{'Strike':>8} {'Sigma':>6} {'P(ITM)':>7} {'Bid':>6} {'OI':>7} {'Warnings'}")
+                    print("-" * 55)
+                    for rec in call_recs:
+                        warnings_str = ", ".join(rec.warnings[:1]) if rec.warnings else "-"
+                        print(
+                            f"${rec.strike:>7.2f} {rec.sigma_distance:>5.2f}σ "
+                            f"{rec.assignment_probability*100:>6.1f}% "
+                            f"${rec.bid if rec.bid else 0:>5.2f} "
+                            f"{rec.open_interest if rec.open_interest else 0:>6} "
+                            f"{warnings_str}"
+                        )
+                else:
+                    print("  No recommendations found for moderate profile")
+
+                # Get put recommendations
+                print("\nTop Put Strike Recommendations (Conservative Profile):")
+                put_recs = optimizer.get_strike_recommendations(
+                    options_chain=options_chain,
+                    current_price=current_price,
+                    volatility=blended_result.volatility,
+                    option_type="put",
+                    expiration_date=nearest_exp,
+                    profile=StrikeProfile.CONSERVATIVE,
+                    limit=3
+                )
+
+                if put_recs:
+                    print(f"{'Strike':>8} {'Sigma':>6} {'P(ITM)':>7} {'Bid':>6} {'OI':>7} {'Warnings'}")
+                    print("-" * 55)
+                    for rec in put_recs:
+                        warnings_str = ", ".join(rec.warnings[:1]) if rec.warnings else "-"
+                        print(
+                            f"${rec.strike:>7.2f} {rec.sigma_distance:>5.2f}σ "
+                            f"{rec.assignment_probability*100:>6.1f}% "
+                            f"${rec.bid if rec.bid else 0:>5.2f} "
+                            f"{rec.open_interest if rec.open_interest else 0:>6} "
+                            f"{warnings_str}"
+                        )
+                else:
+                    print("  No recommendations found for conservative profile")
+
+            # Final summary
+            print("\n" + "=" * 70)
+            print("SUMMARY")
+            print("=" * 70)
+            print(f"\nStock: {symbol} @ ${current_price:.2f}")
+            print(f"Blended Volatility: {blended_result.volatility*100:.2f}%")
+            print(f"ATM Implied Volatility: {atm_iv*100:.2f}%")
+            print(f"Volatility Regime: {regime}")
+
+            if nearest_exp and profile_strikes and put_profile_strikes:
+                mod_call = profile_strikes[StrikeProfile.MODERATE]
+                cons_put = put_profile_strikes[StrikeProfile.CONSERVATIVE]
+                mod_call_prob = mod_call.assignment_probability * 100 if mod_call.assignment_probability else 0
+                cons_put_prob = cons_put.assignment_probability * 100 if cons_put.assignment_probability else 0
+                print(f"\nSuggested Strikes ({nearest_exp}):")
+                print(f"  Covered Call (Moderate): ${mod_call.tradeable_strike:.2f} ({mod_call_prob:.1f}% P(ITM))")
+                print(f"  Cash-Secured Put (Conservative): ${cons_put.tradeable_strike:.2f} ({cons_put_prob:.1f}% P(ITM))")
 
         else:
             print("\n⚠ Could not extract implied volatility from options chain")
