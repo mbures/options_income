@@ -1,11 +1,42 @@
-"""Local file-based cache for API data with TTL support and usage tracking."""
+"""SQLite-based cache for market data with TTL support and usage tracking.
+
+This module provides a persistent cache using SQLite for storing market data
+(stock prices and option contracts) with proper schema and API usage tracking.
+
+Features:
+- SQLite-based storage for reliability and performance
+- Unified market_data table for stocks and options
+- TTL (time-to-live) validation on read
+- API usage tracking (especially for Alpha Vantage daily limits)
+- JSON column support with SQLite JSON1 extension
+- Thread-safe operations
+
+Schema:
+    market_data:
+        - timestamp: Data point timestamp (trading date for stocks, retrieval time for options)
+        - symbol: Stock ticker symbol
+        - data_type: 'stock' or 'option'
+        - json_data: Full data as JSON
+        - expiration_date: For options only (NULL for stocks)
+        - strike: For options only (NULL for stocks)
+        - option_type: 'Call' or 'Put' for options (NULL for stocks)
+        - cached_at: When the data was cached
+
+    api_usage:
+        - service: API service name (e.g., 'alpha_vantage')
+        - date: Date of usage
+        - count: Number of API calls
+"""
 
 import json
 import logging
-import re
-from datetime import datetime
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Generator
+
+logger = logging.getLogger(__name__)
 
 
 class CacheError(Exception):
@@ -16,17 +47,28 @@ class CacheError(Exception):
 
 class LocalFileCache:
     """
-    File-based cache for storing API responses locally.
+    SQLite-based cache for storing market data locally.
+
+    All market data (stock prices and option contracts) flows through a single
+    unified table with proper schema for efficient querying.
 
     Features:
-    - JSON-based storage for human readability
+    - SQLite storage for reliability and atomic operations
+    - Unified market_data table for stocks and options
     - TTL (time-to-live) validation on read
     - API usage tracking (especially for Alpha Vantage daily limits)
-    - Safe key sanitization for filesystem compatibility
+    - JSON column support for flexible data storage
 
     Attributes:
-        cache_dir: Directory where cache files are stored
+        cache_dir: Directory where the cache database is stored
+        db_path: Path to the SQLite database file
     """
+
+    DB_FILENAME = "cache.db"
+
+    # Data type constants
+    DATA_TYPE_STOCK = "stock"
+    DATA_TYPE_OPTION = "option"
 
     def __init__(self, cache_dir: Optional[str] = None):
         """
@@ -45,137 +87,450 @@ class LocalFileCache:
         # Create cache directory if it doesn't exist
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Usage tracking file
-        self._usage_file = self.cache_dir / "api_usage.json"
+        # Database path
+        self.db_path = self.cache_dir / self.DB_FILENAME
 
-        logging.debug(f"LocalFileCache initialized at {self.cache_dir}")
+        # Initialize database schema
+        self._init_db()
 
-    def _get_cache_path(self, key: str) -> Path:
+        logger.debug(f"LocalFileCache initialized at {self.cache_dir}")
+
+    @contextmanager
+    def _get_connection(self) -> Generator[sqlite3.Connection, None, None]:
         """
-        Get the filesystem path for a cache key.
+        Get a database connection with proper cleanup.
 
-        Args:
-            key: Cache key to convert to path
-
-        Returns:
-            Path object for the cache file
+        Yields:
+            SQLite connection object
         """
-        # Sanitize key for filesystem safety
-        # Replace any non-alphanumeric characters (except underscore and hyphen) with underscore
-        safe_key = re.sub(r"[^a-zA-Z0-9_-]", "_", key)
-        return self.cache_dir / f"{safe_key}.json"
-
-    def get(
-        self, key: str, max_age_hours: Optional[float] = None
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve data from cache.
-
-        Args:
-            key: Cache key to retrieve
-            max_age_hours: Maximum age in hours for the cached data.
-                          If None, returns data regardless of age.
-                          If specified, returns None if data is older than this.
-
-        Returns:
-            Cached data as dictionary, or None if not found/expired/invalid
-        """
-        cache_path = self._get_cache_path(key)
-
-        if not cache_path.exists():
-            logging.debug(f"Cache miss: {key}")
-            return None
-
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+        conn.row_factory = sqlite3.Row
         try:
-            with open(cache_path, "r") as f:
-                data = json.load(f)
+            yield conn
+        finally:
+            conn.close()
 
-            # Check expiry if max_age_hours is specified
-            if max_age_hours is not None:
-                cached_at_str = data.get("_cached_at")
-                if cached_at_str is None:
-                    logging.debug(f"Cache entry has no timestamp: {key}")
-                    return None
+    def _init_db(self) -> None:
+        """Initialize the database schema."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
 
-                try:
-                    cached_at = datetime.fromisoformat(cached_at_str)
-                    age_hours = (datetime.now() - cached_at).total_seconds() / 3600
-                    if age_hours > max_age_hours:
-                        logging.debug(
-                            f"Cache expired: {key} (age: {age_hours:.1f}h > {max_age_hours}h)"
-                        )
-                        return None
-                except ValueError:
-                    logging.warning(f"Invalid timestamp in cache: {key}")
-                    return None
+            # Create market_data table (unified schema for stocks and options)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS market_data (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    data_type TEXT NOT NULL,
+                    json_data TEXT NOT NULL,
+                    expiration_date TEXT,
+                    strike REAL,
+                    option_type TEXT,
+                    cached_at TEXT NOT NULL,
+                    UNIQUE(timestamp, symbol, data_type, expiration_date, strike, option_type)
+                )
+            """)
 
-            logging.debug(f"Cache hit: {key}")
-            return data
+            # Create indexes for efficient queries
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_market_data_symbol_type
+                ON market_data(symbol, data_type)
+            """)
 
-        except json.JSONDecodeError as e:
-            logging.warning(f"Cache read error (invalid JSON) for {key}: {e}")
-            return None
-        except IOError as e:
-            logging.warning(f"Cache read error (IO) for {key}: {e}")
-            return None
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_market_data_timestamp
+                ON market_data(timestamp)
+            """)
 
-    def set(self, key: str, data: Dict[str, Any]) -> None:
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_market_data_cached_at
+                ON market_data(cached_at)
+            """)
+
+            # Create api_usage table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS api_usage (
+                    service TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    count INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (service, date)
+                )
+            """)
+
+            conn.commit()
+            logger.debug("Database schema initialized")
+
+    # ==================== Stock Price Methods ====================
+
+    def set_stock_price(
+        self,
+        symbol: str,
+        timestamp: str,
+        data: Dict[str, Any]
+    ) -> None:
         """
-        Store data in cache.
+        Store a single stock price data point.
 
         Args:
-            key: Cache key
-            data: Data to cache (must be JSON serializable)
+            symbol: Stock ticker symbol (e.g., "AAPL")
+            timestamp: Trading date in ISO format (YYYY-MM-DD)
+            data: OHLCV data dictionary with keys: open, high, low, close, volume
 
         Raises:
-            CacheError: If data cannot be written to cache
+            CacheError: If data cannot be written
         """
-        cache_path = self._get_cache_path(key)
-
-        # Add timestamp
-        data_with_timestamp = data.copy()
-        data_with_timestamp["_cached_at"] = datetime.now().isoformat()
+        symbol = symbol.upper()
+        cached_at = datetime.now().isoformat()
 
         try:
-            with open(cache_path, "w") as f:
-                json.dump(data_with_timestamp, f, indent=2)
-            logging.debug(f"Cached: {key}")
-        except (IOError, TypeError) as e:
-            logging.error(f"Cache write error for {key}: {e}")
-            raise CacheError(f"Failed to write cache for {key}: {e}")
+            json_data = json.dumps(data)
 
-    def delete(self, key: str) -> bool:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO market_data
+                    (timestamp, symbol, data_type, json_data, expiration_date, strike, option_type, cached_at)
+                    VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)
+                    """,
+                    (timestamp, symbol, self.DATA_TYPE_STOCK, json_data, cached_at)
+                )
+                conn.commit()
+
+            logger.debug(f"Cached stock price: {symbol} @ {timestamp}")
+
+        except (sqlite3.Error, TypeError) as e:
+            logger.error(f"Cache write error for stock {symbol}: {e}")
+            raise CacheError(f"Failed to cache stock price for {symbol}: {e}")
+
+    def set_stock_prices(
+        self,
+        symbol: str,
+        prices: Dict[str, Dict[str, Any]]
+    ) -> int:
         """
-        Delete a cache entry.
+        Store multiple stock price data points.
 
         Args:
-            key: Cache key to delete
+            symbol: Stock ticker symbol
+            prices: Dictionary mapping timestamps to OHLCV data
+                    e.g., {"2026-01-15": {"open": 10.5, "high": 10.75, ...}}
 
         Returns:
-            True if entry was deleted, False if it didn't exist
-        """
-        cache_path = self._get_cache_path(key)
-        if cache_path.exists():
-            cache_path.unlink()
-            logging.debug(f"Deleted cache: {key}")
-            return True
-        return False
+            Number of price points stored
 
-    def clear_all(self) -> int:
+        Raises:
+            CacheError: If data cannot be written
         """
-        Clear all cache entries except API usage tracking.
-
-        Returns:
-            Number of cache entries deleted
-        """
+        symbol = symbol.upper()
+        cached_at = datetime.now().isoformat()
         count = 0
-        for cache_file in self.cache_dir.glob("*.json"):
-            # Preserve the API usage tracking file
-            if cache_file.name != "api_usage.json":
-                cache_file.unlink()
-                count += 1
-        logging.info(f"Cleared {count} cache entries")
-        return count
+
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+
+                for timestamp, data in prices.items():
+                    json_data = json.dumps(data)
+                    cursor.execute(
+                        """
+                        INSERT OR REPLACE INTO market_data
+                        (timestamp, symbol, data_type, json_data, expiration_date, strike, option_type, cached_at)
+                        VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)
+                        """,
+                        (timestamp, symbol, self.DATA_TYPE_STOCK, json_data, cached_at)
+                    )
+                    count += 1
+
+                conn.commit()
+
+            logger.debug(f"Cached {count} stock prices for {symbol}")
+            return count
+
+        except (sqlite3.Error, TypeError) as e:
+            logger.error(f"Cache write error for stock prices {symbol}: {e}")
+            raise CacheError(f"Failed to cache stock prices for {symbol}: {e}")
+
+    def get_stock_prices(
+        self,
+        symbol: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        max_age_hours: Optional[float] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Retrieve stock price data points.
+
+        Args:
+            symbol: Stock ticker symbol
+            start_date: Optional start date filter (inclusive, YYYY-MM-DD)
+            end_date: Optional end date filter (inclusive, YYYY-MM-DD)
+            max_age_hours: Maximum cache age in hours (None = no limit)
+
+        Returns:
+            Dictionary mapping timestamps to OHLCV data
+            e.g., {"2026-01-15": {"open": 10.5, "high": 10.75, ...}}
+        """
+        symbol = symbol.upper()
+        result = {}
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Build query with optional filters
+            query = """
+                SELECT timestamp, json_data, cached_at
+                FROM market_data
+                WHERE symbol = ? AND data_type = ?
+            """
+            params: List[Any] = [symbol, self.DATA_TYPE_STOCK]
+
+            if start_date:
+                query += " AND timestamp >= ?"
+                params.append(start_date)
+
+            if end_date:
+                query += " AND timestamp <= ?"
+                params.append(end_date)
+
+            if max_age_hours is not None:
+                cutoff = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
+                query += " AND cached_at >= ?"
+                params.append(cutoff)
+
+            query += " ORDER BY timestamp"
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+        for row in rows:
+            try:
+                data = json.loads(row["json_data"])
+                result[row["timestamp"]] = data
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid JSON for {symbol} @ {row['timestamp']}")
+
+        logger.debug(f"Retrieved {len(result)} stock prices for {symbol}")
+        return result
+
+    def has_stock_prices(
+        self,
+        symbol: str,
+        max_age_hours: Optional[float] = None
+    ) -> bool:
+        """
+        Check if we have cached stock prices for a symbol.
+
+        Args:
+            symbol: Stock ticker symbol
+            max_age_hours: Maximum cache age in hours (None = no limit)
+
+        Returns:
+            True if cached data exists
+        """
+        symbol = symbol.upper()
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            query = """
+                SELECT COUNT(*) as count
+                FROM market_data
+                WHERE symbol = ? AND data_type = ?
+            """
+            params: List[Any] = [symbol, self.DATA_TYPE_STOCK]
+
+            if max_age_hours is not None:
+                cutoff = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
+                query += " AND cached_at >= ?"
+                params.append(cutoff)
+
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+
+        return row["count"] > 0 if row else False
+
+    # ==================== Option Contract Methods ====================
+
+    def set_option_contract(
+        self,
+        symbol: str,
+        timestamp: str,
+        contract: Dict[str, Any]
+    ) -> None:
+        """
+        Store a single option contract.
+
+        Args:
+            symbol: Underlying stock ticker symbol
+            timestamp: Retrieval timestamp in ISO format
+            contract: Option contract data with required keys:
+                      expiration_date, strike, option_type (Call/Put)
+
+        Raises:
+            CacheError: If data cannot be written
+            ValueError: If required contract fields are missing
+        """
+        symbol = symbol.upper()
+        cached_at = datetime.now().isoformat()
+
+        # Validate required fields
+        required = ["expiration_date", "strike", "option_type"]
+        missing = [f for f in required if f not in contract]
+        if missing:
+            raise ValueError(f"Missing required contract fields: {missing}")
+
+        expiration_date = contract["expiration_date"]
+        strike = float(contract["strike"])
+        option_type = contract["option_type"]
+
+        try:
+            json_data = json.dumps(contract)
+
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO market_data
+                    (timestamp, symbol, data_type, json_data, expiration_date, strike, option_type, cached_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (timestamp, symbol, self.DATA_TYPE_OPTION, json_data,
+                     expiration_date, strike, option_type, cached_at)
+                )
+                conn.commit()
+
+            logger.debug(f"Cached option: {symbol} {expiration_date} ${strike} {option_type}")
+
+        except (sqlite3.Error, TypeError) as e:
+            logger.error(f"Cache write error for option {symbol}: {e}")
+            raise CacheError(f"Failed to cache option contract for {symbol}: {e}")
+
+    def set_option_contracts(
+        self,
+        symbol: str,
+        timestamp: str,
+        contracts: List[Dict[str, Any]]
+    ) -> int:
+        """
+        Store multiple option contracts.
+
+        Args:
+            symbol: Underlying stock ticker symbol
+            timestamp: Retrieval timestamp in ISO format
+            contracts: List of option contract dictionaries
+
+        Returns:
+            Number of contracts stored
+
+        Raises:
+            CacheError: If data cannot be written
+        """
+        symbol = symbol.upper()
+        cached_at = datetime.now().isoformat()
+        count = 0
+        errors = 0
+
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+
+                for contract in contracts:
+                    # Skip contracts missing required fields
+                    if not all(k in contract for k in ["expiration_date", "strike", "option_type"]):
+                        errors += 1
+                        continue
+
+                    json_data = json.dumps(contract)
+                    cursor.execute(
+                        """
+                        INSERT OR REPLACE INTO market_data
+                        (timestamp, symbol, data_type, json_data, expiration_date, strike, option_type, cached_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (timestamp, symbol, self.DATA_TYPE_OPTION, json_data,
+                         contract["expiration_date"], float(contract["strike"]),
+                         contract["option_type"], cached_at)
+                    )
+                    count += 1
+
+                conn.commit()
+
+            if errors > 0:
+                logger.warning(f"Skipped {errors} invalid contracts for {symbol}")
+            logger.debug(f"Cached {count} option contracts for {symbol}")
+            return count
+
+        except (sqlite3.Error, TypeError) as e:
+            logger.error(f"Cache write error for option contracts {symbol}: {e}")
+            raise CacheError(f"Failed to cache option contracts for {symbol}: {e}")
+
+    def get_option_contracts(
+        self,
+        symbol: str,
+        expiration_date: Optional[str] = None,
+        strike: Optional[float] = None,
+        option_type: Optional[str] = None,
+        max_age_hours: Optional[float] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve option contracts.
+
+        Args:
+            symbol: Underlying stock ticker symbol
+            expiration_date: Optional filter by expiration date
+            strike: Optional filter by strike price
+            option_type: Optional filter by type ('Call' or 'Put')
+            max_age_hours: Maximum cache age in hours (None = no limit)
+
+        Returns:
+            List of option contract dictionaries
+        """
+        symbol = symbol.upper()
+        result = []
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Build query with optional filters
+            query = """
+                SELECT json_data, cached_at
+                FROM market_data
+                WHERE symbol = ? AND data_type = ?
+            """
+            params: List[Any] = [symbol, self.DATA_TYPE_OPTION]
+
+            if expiration_date:
+                query += " AND expiration_date = ?"
+                params.append(expiration_date)
+
+            if strike is not None:
+                query += " AND strike = ?"
+                params.append(strike)
+
+            if option_type:
+                query += " AND option_type = ?"
+                params.append(option_type)
+
+            if max_age_hours is not None:
+                cutoff = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
+                query += " AND cached_at >= ?"
+                params.append(cutoff)
+
+            query += " ORDER BY expiration_date, strike, option_type"
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+        for row in rows:
+            try:
+                data = json.loads(row["json_data"])
+                result.append(data)
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid JSON for option contract {symbol}")
+
+        logger.debug(f"Retrieved {len(result)} option contracts for {symbol}")
+        return result
 
     # ==================== API Usage Tracking ====================
 
@@ -186,9 +541,17 @@ class LocalFileCache:
         Returns:
             Number of API calls made today
         """
-        usage = self._load_usage()
         today = datetime.now().strftime("%Y-%m-%d")
-        return usage.get("alpha_vantage", {}).get(today, 0)
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT count FROM api_usage WHERE service = ? AND date = ?",
+                ("alpha_vantage", today)
+            )
+            row = cursor.fetchone()
+
+        return row["count"] if row else 0
 
     def increment_alpha_vantage_usage(self) -> int:
         """
@@ -197,39 +560,162 @@ class LocalFileCache:
         Returns:
             Updated usage count for today
         """
-        usage = self._load_usage()
         today = datetime.now().strftime("%Y-%m-%d")
 
-        if "alpha_vantage" not in usage:
-            usage["alpha_vantage"] = {}
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
 
-        usage["alpha_vantage"][today] = usage["alpha_vantage"].get(today, 0) + 1
-        self._save_usage(usage)
+            # Use UPSERT pattern for atomic increment
+            cursor.execute(
+                """
+                INSERT INTO api_usage (service, date, count)
+                VALUES (?, ?, 1)
+                ON CONFLICT(service, date) DO UPDATE SET count = count + 1
+                """,
+                ("alpha_vantage", today)
+            )
+            conn.commit()
 
-        return usage["alpha_vantage"][today]
+            # Get updated count
+            cursor.execute(
+                "SELECT count FROM api_usage WHERE service = ? AND date = ?",
+                ("alpha_vantage", today)
+            )
+            row = cursor.fetchone()
 
-    def _load_usage(self) -> Dict[str, Any]:
+        return row["count"] if row else 1
+
+    # ==================== Utility Methods ====================
+
+    def delete_market_data(
+        self,
+        symbol: Optional[str] = None,
+        data_type: Optional[str] = None,
+        before_date: Optional[str] = None
+    ) -> int:
         """
-        Load API usage tracking data.
-
-        Returns:
-            Usage data dictionary
-        """
-        if self._usage_file.exists():
-            try:
-                with open(self._usage_file, "r") as f:
-                    return json.load(f)
-            except json.JSONDecodeError:
-                logging.warning("Corrupted usage file, resetting")
-                return {}
-        return {}
-
-    def _save_usage(self, usage: Dict[str, Any]) -> None:
-        """
-        Save API usage tracking data.
+        Delete market data entries.
 
         Args:
-            usage: Usage data to save
+            symbol: Optional filter by symbol
+            data_type: Optional filter by type ('stock' or 'option')
+            before_date: Optional delete data with timestamp before this date
+
+        Returns:
+            Number of entries deleted
         """
-        with open(self._usage_file, "w") as f:
-            json.dump(usage, f, indent=2)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            query = "DELETE FROM market_data WHERE 1=1"
+            params: List[Any] = []
+
+            if symbol:
+                query += " AND symbol = ?"
+                params.append(symbol.upper())
+
+            if data_type:
+                query += " AND data_type = ?"
+                params.append(data_type)
+
+            if before_date:
+                query += " AND timestamp < ?"
+                params.append(before_date)
+
+            cursor.execute(query, params)
+            conn.commit()
+            count = cursor.rowcount
+
+        if count > 0:
+            logger.info(f"Deleted {count} market data entries")
+        return count
+
+    def clear_all(self) -> int:
+        """
+        Clear all market data (preserves API usage tracking).
+
+        Returns:
+            Number of entries deleted
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as count FROM market_data")
+            count = cursor.fetchone()["count"]
+
+            cursor.execute("DELETE FROM market_data")
+            conn.commit()
+
+        if count > 0:
+            logger.info(f"Cleared {count} market data entries")
+        return count
+
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get cache statistics.
+
+        Returns:
+            Dictionary with cache statistics
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Count by type
+            cursor.execute("""
+                SELECT data_type, COUNT(*) as count
+                FROM market_data
+                GROUP BY data_type
+            """)
+            type_counts = {row["data_type"]: row["count"] for row in cursor.fetchall()}
+
+            # Count symbols
+            cursor.execute("""
+                SELECT COUNT(DISTINCT symbol) as symbols
+                FROM market_data
+            """)
+            symbol_count = cursor.fetchone()["symbols"]
+
+            # Date range
+            cursor.execute("""
+                SELECT MIN(timestamp) as oldest, MAX(timestamp) as newest
+                FROM market_data
+            """)
+            row = cursor.fetchone()
+
+            # Database size
+            cursor.execute("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()")
+            db_size = cursor.fetchone()["size"]
+
+        return {
+            "stock_prices_count": type_counts.get(self.DATA_TYPE_STOCK, 0),
+            "option_contracts_count": type_counts.get(self.DATA_TYPE_OPTION, 0),
+            "total_entries": sum(type_counts.values()) if type_counts else 0,
+            "unique_symbols": symbol_count,
+            "oldest_data": row["oldest"],
+            "newest_data": row["newest"],
+            "database_size_bytes": db_size
+        }
+
+    def cleanup_expired(self, max_age_hours: float) -> int:
+        """
+        Remove expired market data entries.
+
+        Args:
+            max_age_hours: Maximum age in hours
+
+        Returns:
+            Number of entries removed
+        """
+        cutoff_time = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM market_data WHERE cached_at < ?",
+                (cutoff_time,)
+            )
+            conn.commit()
+            count = cursor.rowcount
+
+        if count > 0:
+            logger.info(f"Cleaned up {count} expired market data entries")
+        return count

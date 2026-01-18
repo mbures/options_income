@@ -1,11 +1,10 @@
-"""Unit tests for local file cache module."""
+"""Unit tests for SQLite-based market data cache module."""
 
 import json
-import os
+import sqlite3
 import pytest
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
 
 from src.cache import LocalFileCache, CacheError
 
@@ -40,206 +39,271 @@ class TestLocalFileCacheInit:
         # Default should be 'cache' directory in project root
         assert cache.cache_dir.name == "cache"
 
-
-class TestLocalFileCacheKeyManagement:
-    """Test suite for cache key sanitization."""
-
-    def test_key_sanitization_alphanumeric(self, tmp_path):
-        """Test that alphanumeric keys are preserved."""
+    def test_cache_creates_database(self, tmp_path):
+        """Test that cache creates SQLite database."""
         cache = LocalFileCache(cache_dir=str(tmp_path))
 
-        path = cache._get_cache_path("AAPL_daily_2026")
-        assert "AAPL_daily_2026" in str(path)
+        db_path = tmp_path / "cache.db"
+        assert db_path.exists()
 
-    def test_key_sanitization_special_characters(self, tmp_path):
-        """Test that special characters are sanitized."""
+    def test_cache_creates_tables(self, tmp_path):
+        """Test that cache creates required tables."""
         cache = LocalFileCache(cache_dir=str(tmp_path))
 
-        # Keys with special characters should be sanitized
-        path = cache._get_cache_path("test/key:with*special?chars")
-        # Should not contain filesystem-unsafe characters
-        assert "/" not in path.name
-        assert ":" not in path.name
-        assert "*" not in path.name
-        assert "?" not in path.name
+        # Check tables exist
+        conn = sqlite3.connect(str(tmp_path / "cache.db"))
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cursor.fetchall()}
+        conn.close()
 
-    def test_key_generates_json_file(self, tmp_path):
-        """Test that cache paths end with .json extension."""
+        assert "market_data" in tables
+        assert "api_usage" in tables
+
+
+class TestLocalFileCacheStockPrices:
+    """Test suite for stock price market data methods."""
+
+    def test_set_and_get_stock_price(self, tmp_path):
+        """Test setting and getting a single stock price."""
         cache = LocalFileCache(cache_dir=str(tmp_path))
 
-        path = cache._get_cache_path("test_key")
-        assert path.suffix == ".json"
-
-
-class TestLocalFileCacheSetGet:
-    """Test suite for cache set and get operations."""
-
-    def test_set_and_get_basic(self, tmp_path):
-        """Test basic set and get operations."""
-        cache = LocalFileCache(cache_dir=str(tmp_path))
-        data = {"symbol": "AAPL", "price": 150.25}
-
-        cache.set("test_key", data)
-        result = cache.get("test_key")
-
-        assert result is not None
-        assert result["symbol"] == "AAPL"
-        assert result["price"] == 150.25
-
-    def test_set_adds_timestamp(self, tmp_path):
-        """Test that set adds _cached_at timestamp."""
-        cache = LocalFileCache(cache_dir=str(tmp_path))
-        data = {"value": 42}
-
-        cache.set("test_key", data)
-        result = cache.get("test_key")
-
-        assert "_cached_at" in result
-        # Should be a valid ISO timestamp
-        datetime.fromisoformat(result["_cached_at"])
-
-    def test_get_nonexistent_key(self, tmp_path):
-        """Test that get returns None for nonexistent keys."""
-        cache = LocalFileCache(cache_dir=str(tmp_path))
-
-        result = cache.get("nonexistent_key")
-
-        assert result is None
-
-    def test_set_overwrites_existing(self, tmp_path):
-        """Test that set overwrites existing data."""
-        cache = LocalFileCache(cache_dir=str(tmp_path))
-
-        cache.set("key", {"version": 1})
-        cache.set("key", {"version": 2})
-        result = cache.get("key")
-
-        assert result["version"] == 2
-
-    def test_get_with_ttl_valid(self, tmp_path):
-        """Test get with TTL returns data if within TTL."""
-        cache = LocalFileCache(cache_dir=str(tmp_path))
-        data = {"value": "fresh"}
-
-        cache.set("key", data)
-        result = cache.get("key", max_age_hours=1.0)
-
-        assert result is not None
-        assert result["value"] == "fresh"
-
-    def test_get_with_ttl_expired(self, tmp_path):
-        """Test get with TTL returns None if data is expired."""
-        cache = LocalFileCache(cache_dir=str(tmp_path))
-        data = {"value": "stale"}
-
-        # Set data with old timestamp
-        cache.set("key", data)
-        # Manually update the timestamp to be old
-        cache_path = cache._get_cache_path("key")
-        with open(cache_path, "r") as f:
-            cached_data = json.load(f)
-        old_time = (datetime.now() - timedelta(hours=2)).isoformat()
-        cached_data["_cached_at"] = old_time
-        with open(cache_path, "w") as f:
-            json.dump(cached_data, f)
-
-        result = cache.get("key", max_age_hours=1.0)
-
-        assert result is None
-
-    def test_get_without_ttl_ignores_age(self, tmp_path):
-        """Test get without TTL returns data regardless of age."""
-        cache = LocalFileCache(cache_dir=str(tmp_path))
-        data = {"value": "old_data"}
-
-        cache.set("key", data)
-        # Manually set old timestamp
-        cache_path = cache._get_cache_path("key")
-        with open(cache_path, "r") as f:
-            cached_data = json.load(f)
-        old_time = (datetime.now() - timedelta(days=30)).isoformat()
-        cached_data["_cached_at"] = old_time
-        with open(cache_path, "w") as f:
-            json.dump(cached_data, f)
-
-        result = cache.get("key")  # No max_age_hours
-
-        assert result is not None
-        assert result["value"] == "old_data"
-
-    def test_set_complex_data(self, tmp_path):
-        """Test setting complex nested data structures."""
-        cache = LocalFileCache(cache_dir=str(tmp_path))
         data = {
-            "symbol": "AAPL",
-            "prices": [150.0, 151.5, 149.0],
-            "metadata": {
-                "source": "alpha_vantage",
-                "nested": {"deep": True}
-            }
+            "open": 150.0,
+            "high": 152.0,
+            "low": 149.0,
+            "close": 151.5,
+            "volume": 1000000
+        }
+        cache.set_stock_price("AAPL", "2026-01-15", data)
+
+        result = cache.get_stock_prices("AAPL")
+        assert "2026-01-15" in result
+        assert result["2026-01-15"]["close"] == 151.5
+
+    def test_set_stock_prices_multiple(self, tmp_path):
+        """Test setting multiple stock prices at once."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        prices = {
+            "2026-01-13": {"open": 149.0, "high": 150.0, "low": 148.0, "close": 149.5, "volume": 900000},
+            "2026-01-14": {"open": 149.5, "high": 151.0, "low": 149.0, "close": 150.5, "volume": 1000000},
+            "2026-01-15": {"open": 150.5, "high": 152.0, "low": 150.0, "close": 151.5, "volume": 1100000}
         }
 
-        cache.set("complex", data)
-        result = cache.get("complex")
-
-        assert result["prices"] == [150.0, 151.5, 149.0]
-        assert result["metadata"]["nested"]["deep"] is True
-
-
-class TestLocalFileCacheDelete:
-    """Test suite for cache delete operations."""
-
-    def test_delete_existing_key(self, tmp_path):
-        """Test deleting an existing cache entry."""
-        cache = LocalFileCache(cache_dir=str(tmp_path))
-        cache.set("to_delete", {"data": 1})
-
-        result = cache.delete("to_delete")
-
-        assert result is True
-        assert cache.get("to_delete") is None
-
-    def test_delete_nonexistent_key(self, tmp_path):
-        """Test deleting a nonexistent key returns False."""
-        cache = LocalFileCache(cache_dir=str(tmp_path))
-
-        result = cache.delete("nonexistent")
-
-        assert result is False
-
-    def test_clear_all(self, tmp_path):
-        """Test clearing all cache entries."""
-        cache = LocalFileCache(cache_dir=str(tmp_path))
-        cache.set("key1", {"data": 1})
-        cache.set("key2", {"data": 2})
-        cache.set("key3", {"data": 3})
-
-        count = cache.clear_all()
+        count = cache.set_stock_prices("AAPL", prices)
 
         assert count == 3
-        assert cache.get("key1") is None
-        assert cache.get("key2") is None
-        assert cache.get("key3") is None
+        result = cache.get_stock_prices("AAPL")
+        assert len(result) == 3
 
-    def test_clear_all_preserves_usage_file(self, tmp_path):
-        """Test that clear_all preserves the API usage tracking file."""
-        cache = LocalFileCache(cache_dir=str(tmp_path))
-        cache.set("key1", {"data": 1})
-        # Create a usage file
-        usage_file = tmp_path / "api_usage.json"
-        usage_file.write_text('{"alpha_vantage": {"2026-01-15": 5}}')
-
-        cache.clear_all()
-
-        assert usage_file.exists()
-
-    def test_clear_all_empty_cache(self, tmp_path):
-        """Test clearing an empty cache."""
+    def test_get_stock_prices_date_filter(self, tmp_path):
+        """Test filtering stock prices by date range."""
         cache = LocalFileCache(cache_dir=str(tmp_path))
 
-        count = cache.clear_all()
+        prices = {
+            "2026-01-10": {"close": 148.0},
+            "2026-01-11": {"close": 149.0},
+            "2026-01-12": {"close": 150.0},
+            "2026-01-13": {"close": 151.0},
+            "2026-01-14": {"close": 152.0}
+        }
+        cache.set_stock_prices("AAPL", prices)
 
-        assert count == 0
+        # Filter by date range
+        result = cache.get_stock_prices("AAPL", start_date="2026-01-11", end_date="2026-01-13")
+        assert len(result) == 3
+        assert "2026-01-10" not in result
+        assert "2026-01-14" not in result
+
+    def test_get_stock_prices_max_age(self, tmp_path):
+        """Test max_age_hours filter for stock prices."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        cache.set_stock_price("AAPL", "2026-01-15", {"close": 150.0})
+
+        # Make the entry old
+        old_time = (datetime.now() - timedelta(hours=48)).isoformat()
+        conn = sqlite3.connect(str(tmp_path / "cache.db"))
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE market_data SET cached_at = ? WHERE symbol = ?",
+            (old_time, "AAPL")
+        )
+        conn.commit()
+        conn.close()
+
+        # Without max_age_hours, should return data
+        result = cache.get_stock_prices("AAPL")
+        assert len(result) == 1
+
+        # With max_age_hours, should return empty
+        result = cache.get_stock_prices("AAPL", max_age_hours=24.0)
+        assert len(result) == 0
+
+    def test_stock_price_symbol_normalization(self, tmp_path):
+        """Test that symbols are normalized to uppercase."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        cache.set_stock_price("aapl", "2026-01-15", {"close": 150.0})
+
+        # Should be able to retrieve with uppercase
+        result = cache.get_stock_prices("AAPL")
+        assert len(result) == 1
+
+    def test_stock_price_overwrites_existing(self, tmp_path):
+        """Test that setting same stock price overwrites existing."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        cache.set_stock_price("AAPL", "2026-01-15", {"close": 150.0})
+        cache.set_stock_price("AAPL", "2026-01-15", {"close": 155.0})
+
+        result = cache.get_stock_prices("AAPL")
+        assert result["2026-01-15"]["close"] == 155.0
+
+    def test_has_stock_prices(self, tmp_path):
+        """Test checking for cached stock prices."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        assert cache.has_stock_prices("AAPL") is False
+
+        cache.set_stock_price("AAPL", "2026-01-15", {"close": 150.0})
+
+        assert cache.has_stock_prices("AAPL") is True
+        assert cache.has_stock_prices("GOOG") is False
+
+    def test_has_stock_prices_with_max_age(self, tmp_path):
+        """Test has_stock_prices with max_age_hours."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        cache.set_stock_price("AAPL", "2026-01-15", {"close": 150.0})
+
+        # Make the entry old
+        old_time = (datetime.now() - timedelta(hours=48)).isoformat()
+        conn = sqlite3.connect(str(tmp_path / "cache.db"))
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE market_data SET cached_at = ? WHERE symbol = ?",
+            (old_time, "AAPL")
+        )
+        conn.commit()
+        conn.close()
+
+        # Without max_age, should return True
+        assert cache.has_stock_prices("AAPL") is True
+
+        # With max_age, should return False (data is too old)
+        assert cache.has_stock_prices("AAPL", max_age_hours=24.0) is False
+
+
+class TestLocalFileCacheOptionContracts:
+    """Test suite for option contract market data methods."""
+
+    def test_set_and_get_option_contract(self, tmp_path):
+        """Test setting and getting a single option contract."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        contract = {
+            "expiration_date": "2026-02-21",
+            "strike": 150.0,
+            "option_type": "Call",
+            "bid": 5.50,
+            "ask": 5.75,
+            "last": 5.60,
+            "volume": 500,
+            "open_interest": 2000,
+            "implied_volatility": 0.25
+        }
+        cache.set_option_contract("AAPL", "2026-01-15T10:00:00", contract)
+
+        result = cache.get_option_contracts("AAPL")
+        assert len(result) == 1
+        assert result[0]["strike"] == 150.0
+        assert result[0]["option_type"] == "Call"
+
+    def test_set_option_contracts_multiple(self, tmp_path):
+        """Test setting multiple option contracts at once."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        contracts = [
+            {"expiration_date": "2026-02-21", "strike": 145.0, "option_type": "Call", "bid": 8.0},
+            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call", "bid": 5.5},
+            {"expiration_date": "2026-02-21", "strike": 155.0, "option_type": "Call", "bid": 3.0},
+            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Put", "bid": 4.5}
+        ]
+
+        count = cache.set_option_contracts("AAPL", "2026-01-15T10:00:00", contracts)
+
+        assert count == 4
+        result = cache.get_option_contracts("AAPL")
+        assert len(result) == 4
+
+    def test_get_option_contracts_by_expiration(self, tmp_path):
+        """Test filtering options by expiration date."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        contracts = [
+            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call"},
+            {"expiration_date": "2026-03-21", "strike": 150.0, "option_type": "Call"},
+            {"expiration_date": "2026-02-21", "strike": 155.0, "option_type": "Call"}
+        ]
+        cache.set_option_contracts("AAPL", "2026-01-15T10:00:00", contracts)
+
+        result = cache.get_option_contracts("AAPL", expiration_date="2026-02-21")
+        assert len(result) == 2
+
+    def test_get_option_contracts_by_strike(self, tmp_path):
+        """Test filtering options by strike price."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        contracts = [
+            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call"},
+            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Put"},
+            {"expiration_date": "2026-02-21", "strike": 155.0, "option_type": "Call"}
+        ]
+        cache.set_option_contracts("AAPL", "2026-01-15T10:00:00", contracts)
+
+        result = cache.get_option_contracts("AAPL", strike=150.0)
+        assert len(result) == 2
+
+    def test_get_option_contracts_by_type(self, tmp_path):
+        """Test filtering options by option type."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        contracts = [
+            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call"},
+            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Put"},
+            {"expiration_date": "2026-02-21", "strike": 155.0, "option_type": "Put"}
+        ]
+        cache.set_option_contracts("AAPL", "2026-01-15T10:00:00", contracts)
+
+        result = cache.get_option_contracts("AAPL", option_type="Put")
+        assert len(result) == 2
+
+    def test_option_contract_missing_required_fields(self, tmp_path):
+        """Test that contracts missing required fields raise ValueError."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        contract = {"bid": 5.50}  # Missing expiration_date, strike, option_type
+
+        with pytest.raises(ValueError, match="Missing required contract fields"):
+            cache.set_option_contract("AAPL", "2026-01-15T10:00:00", contract)
+
+    def test_set_option_contracts_skips_invalid(self, tmp_path):
+        """Test that invalid contracts are skipped when setting multiple."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        contracts = [
+            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call"},  # Valid
+            {"bid": 5.50},  # Invalid - missing required fields
+            {"expiration_date": "2026-02-21", "strike": 155.0, "option_type": "Call"}   # Valid
+        ]
+
+        count = cache.set_option_contracts("AAPL", "2026-01-15T10:00:00", contracts)
+
+        assert count == 2  # Only 2 valid contracts
+        result = cache.get_option_contracts("AAPL")
+        assert len(result) == 2
 
 
 class TestLocalFileCacheAPIUsageTracking:
@@ -295,44 +359,168 @@ class TestLocalFileCacheAPIUsageTracking:
         cache.increment_alpha_vantage_usage()
 
         # Manually add usage for yesterday
-        usage_file = tmp_path / "api_usage.json"
-        with open(usage_file, "r") as f:
-            usage_data = json.load(f)
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-        usage_data["alpha_vantage"][yesterday] = 10
-        with open(usage_file, "w") as f:
-            json.dump(usage_data, f)
+        conn = sqlite3.connect(str(tmp_path / "cache.db"))
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO api_usage (service, date, count) VALUES (?, ?, ?)",
+            ("alpha_vantage", yesterday, 10)
+        )
+        conn.commit()
+        conn.close()
 
         # Today's usage should still be 1
         assert cache.get_alpha_vantage_usage_today() == 1
 
 
-class TestLocalFileCacheErrorHandling:
-    """Test suite for error handling."""
+class TestLocalFileCacheMarketData:
+    """Test suite for general market data operations."""
 
-    def test_get_handles_corrupted_json(self, tmp_path):
-        """Test that get handles corrupted JSON gracefully."""
+    def test_delete_market_data_by_symbol(self, tmp_path):
+        """Test deleting market data by symbol."""
         cache = LocalFileCache(cache_dir=str(tmp_path))
-        cache_path = cache._get_cache_path("corrupted")
-        cache_path.write_text("not valid json {{{")
 
-        result = cache.get("corrupted")
+        cache.set_stock_price("AAPL", "2026-01-15", {"close": 150.0})
+        cache.set_stock_price("GOOG", "2026-01-15", {"close": 100.0})
 
-        assert result is None
+        count = cache.delete_market_data(symbol="AAPL")
 
-    def test_get_handles_missing_timestamp(self, tmp_path):
-        """Test that get handles data without timestamp."""
+        assert count == 1
+        assert len(cache.get_stock_prices("AAPL")) == 0
+        assert len(cache.get_stock_prices("GOOG")) == 1
+
+    def test_delete_market_data_by_type(self, tmp_path):
+        """Test deleting market data by type."""
         cache = LocalFileCache(cache_dir=str(tmp_path))
-        cache_path = cache._get_cache_path("no_timestamp")
-        cache_path.write_text('{"data": "value"}')
 
-        # Without max_age_hours, should return data
-        result = cache.get("no_timestamp")
-        assert result is not None
+        cache.set_stock_price("AAPL", "2026-01-15", {"close": 150.0})
+        cache.set_option_contract("AAPL", "2026-01-15T10:00:00", {
+            "expiration_date": "2026-02-21",
+            "strike": 150.0,
+            "option_type": "Call"
+        })
 
-        # With max_age_hours, should return None (can't validate age)
-        result = cache.get("no_timestamp", max_age_hours=1.0)
-        assert result is None
+        count = cache.delete_market_data(data_type="stock")
+
+        assert count == 1
+        assert len(cache.get_stock_prices("AAPL")) == 0
+        assert len(cache.get_option_contracts("AAPL")) == 1
+
+    def test_delete_market_data_before_date(self, tmp_path):
+        """Test deleting market data before a specific date."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        prices = {
+            "2026-01-10": {"close": 148.0},
+            "2026-01-11": {"close": 149.0},
+            "2026-01-15": {"close": 152.0}
+        }
+        cache.set_stock_prices("AAPL", prices)
+
+        count = cache.delete_market_data(before_date="2026-01-12")
+
+        assert count == 2
+        result = cache.get_stock_prices("AAPL")
+        assert len(result) == 1
+        assert "2026-01-15" in result
+
+    def test_clear_all(self, tmp_path):
+        """Test clearing all market data."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        cache.set_stock_price("AAPL", "2026-01-15", {"close": 150.0})
+        cache.set_stock_price("GOOG", "2026-01-15", {"close": 100.0})
+
+        count = cache.clear_all()
+
+        assert count == 2
+        assert len(cache.get_stock_prices("AAPL")) == 0
+        assert len(cache.get_stock_prices("GOOG")) == 0
+
+    def test_clear_all_preserves_usage_tracking(self, tmp_path):
+        """Test that clear_all preserves the API usage tracking."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+        cache.set_stock_price("AAPL", "2026-01-15", {"close": 150.0})
+
+        # Add some usage tracking
+        cache.increment_alpha_vantage_usage()
+        cache.increment_alpha_vantage_usage()
+
+        cache.clear_all()
+
+        # Usage should still be tracked
+        assert cache.get_alpha_vantage_usage_today() == 2
+
+    def test_get_stats(self, tmp_path):
+        """Test getting cache statistics."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        # Add stock prices
+        cache.set_stock_prices("AAPL", {
+            "2026-01-14": {"close": 149.0},
+            "2026-01-15": {"close": 150.0}
+        })
+        cache.set_stock_price("GOOG", "2026-01-15", {"close": 100.0})
+
+        # Add options
+        cache.set_option_contracts("AAPL", "2026-01-15T10:00:00", [
+            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call"},
+            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Put"}
+        ])
+
+        stats = cache.get_stats()
+
+        assert stats["stock_prices_count"] == 3
+        assert stats["option_contracts_count"] == 2
+        assert stats["total_entries"] == 5
+        assert stats["unique_symbols"] == 2
+        assert stats["oldest_data"] is not None
+        assert stats["newest_data"] is not None
+        assert stats["database_size_bytes"] > 0
+
+    def test_cleanup_expired(self, tmp_path):
+        """Test cleanup of expired market data."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        cache.set_stock_price("AAPL", "2026-01-15", {"close": 150.0})
+        cache.set_stock_price("AAPL", "2026-01-14", {"close": 149.0})
+
+        # Make one entry old
+        old_time = (datetime.now() - timedelta(hours=48)).isoformat()
+        conn = sqlite3.connect(str(tmp_path / "cache.db"))
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE market_data SET cached_at = ? WHERE timestamp = ?",
+            (old_time, "2026-01-14")
+        )
+        conn.commit()
+        conn.close()
+
+        count = cache.cleanup_expired(max_age_hours=24.0)
+
+        assert count == 1
+        result = cache.get_stock_prices("AAPL")
+        assert len(result) == 1
+        assert "2026-01-15" in result
+
+    def test_stock_and_option_data_coexist(self, tmp_path):
+        """Test that stock and option data can coexist for same symbol."""
+        cache = LocalFileCache(cache_dir=str(tmp_path))
+
+        # Add both stock and option data
+        cache.set_stock_price("AAPL", "2026-01-15", {"close": 150.0})
+        cache.set_option_contract("AAPL", "2026-01-15T10:00:00", {
+            "expiration_date": "2026-02-21",
+            "strike": 150.0,
+            "option_type": "Call"
+        })
+
+        # Both should be retrievable independently
+        stock_result = cache.get_stock_prices("AAPL")
+        option_result = cache.get_option_contracts("AAPL")
+
+        assert len(stock_result) == 1
+        assert len(option_result) == 1
 
 
 class TestLocalFileCacheIntegration:
@@ -343,27 +531,42 @@ class TestLocalFileCacheIntegration:
         cache = LocalFileCache(cache_dir=str(tmp_path))
 
         # Simulate caching price data
-        price_data = {
-            "symbol": "AAPL",
-            "dates": ["2026-01-13", "2026-01-14", "2026-01-15"],
-            "closes": [150.0, 151.5, 152.0],
-            "opens": [149.5, 150.5, 151.0],
-            "highs": [152.0, 153.0, 154.0],
-            "lows": [148.0, 149.0, 150.0],
-            "volumes": [1000000, 1100000, 1200000]
+        prices = {
+            "2026-01-13": {"open": 149.5, "high": 152.0, "low": 148.0, "close": 150.0, "volume": 1000000},
+            "2026-01-14": {"open": 150.5, "high": 153.0, "low": 149.0, "close": 151.5, "volume": 1100000},
+            "2026-01-15": {"open": 151.0, "high": 154.0, "low": 150.0, "close": 152.0, "volume": 1200000}
         }
 
-        cache_key = f"price_daily_AAPL_compact"
-        cache.set(cache_key, price_data)
+        cache.set_stock_prices("AAPL", prices)
 
         # Check API usage
         cache.increment_alpha_vantage_usage()
 
         # Retrieve and verify
-        cached = cache.get(cache_key, max_age_hours=24)
-        assert cached is not None
-        assert cached["symbol"] == "AAPL"
-        assert len(cached["closes"]) == 3
+        cached = cache.get_stock_prices("AAPL")
+        assert len(cached) == 3
+        assert cached["2026-01-15"]["close"] == 152.0
 
         # Check usage
         assert cache.get_alpha_vantage_usage_today() == 1
+
+    def test_concurrent_access(self, tmp_path):
+        """Test that multiple cache instances can access the same database."""
+        cache1 = LocalFileCache(cache_dir=str(tmp_path))
+        cache2 = LocalFileCache(cache_dir=str(tmp_path))
+
+        # Write from one instance
+        cache1.set_stock_price("AAPL", "2026-01-15", {"close": 150.0})
+
+        # Read from another
+        result = cache2.get_stock_prices("AAPL")
+        assert len(result) == 1
+        assert result["2026-01-15"]["close"] == 150.0
+
+        # Increment usage from both
+        cache1.increment_alpha_vantage_usage()
+        cache2.increment_alpha_vantage_usage()
+
+        # Both should see the total
+        assert cache1.get_alpha_vantage_usage_today() == 2
+        assert cache2.get_alpha_vantage_usage_today() == 2

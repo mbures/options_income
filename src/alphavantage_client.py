@@ -28,9 +28,12 @@ Usage:
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 
 import requests
+
+if TYPE_CHECKING:
+    from .cache import LocalFileCache
 
 from .volatility import PriceData
 
@@ -123,13 +126,14 @@ class AlphaVantageClient:
         """
         symbol = symbol.upper()
 
-        # Check file-based cache (24-hour TTL for price data)
-        file_cache_key = f"price_daily_{symbol}"
+        # Check cache for existing stock prices (24-hour TTL)
         if self._file_cache:
-            cached_response = self._file_cache.get(file_cache_key, max_age_hours=24.0)
-            if cached_response:
-                logger.info(f"Using file-cached price data for {symbol}")
-                return self._parse_daily_response(cached_response, symbol, lookback_days)
+            if self._file_cache.has_stock_prices(symbol, max_age_hours=24.0):
+                cached_prices = self._file_cache.get_stock_prices(symbol, max_age_hours=24.0)
+                if len(cached_prices) >= min(lookback_days, self.MAX_LOOKBACK_DAYS) * 0.8:
+                    # Have enough cached data (allow 20% buffer for weekends/holidays)
+                    logger.info(f"Using cached price data for {symbol} ({len(cached_prices)} days)")
+                    return self._build_price_data_from_cache(cached_prices, lookback_days)
 
         # Check API usage before making request
         if self._file_cache:
@@ -164,12 +168,83 @@ class AlphaVantageClient:
             new_usage = self._file_cache.increment_alpha_vantage_usage()
             logger.debug(f"Alpha Vantage API usage today: {new_usage}/{self.DAILY_LIMIT}")
 
-        # Cache raw response to file
-        if self._file_cache:
-            self._file_cache.set(file_cache_key, data)
+        # Parse response and cache individual price points
+        price_data = self._parse_daily_response(data, symbol, lookback_days)
 
-        # Parse and return
-        return self._parse_daily_response(data, symbol, lookback_days)
+        # Store individual price points in cache
+        if self._file_cache:
+            self._cache_price_data(symbol, price_data)
+
+        return price_data
+
+    def _cache_price_data(self, symbol: str, price_data: PriceData) -> None:
+        """
+        Cache individual price data points to the market_data table.
+
+        Args:
+            symbol: Stock ticker symbol
+            price_data: PriceData object to cache
+        """
+        prices_dict = {}
+        for i, date_str in enumerate(price_data.dates):
+            prices_dict[date_str] = {
+                "open": price_data.opens[i] if price_data.opens else None,
+                "high": price_data.highs[i] if price_data.highs else None,
+                "low": price_data.lows[i] if price_data.lows else None,
+                "close": price_data.closes[i],
+                "volume": price_data.volumes[i] if price_data.volumes else None
+            }
+
+        count = self._file_cache.set_stock_prices(symbol, prices_dict)
+        logger.debug(f"Cached {count} price points for {symbol}")
+
+    def _build_price_data_from_cache(
+        self,
+        cached_prices: Dict[str, Dict[str, Any]],
+        lookback_days: int
+    ) -> PriceData:
+        """
+        Build PriceData from cached price points.
+
+        Args:
+            cached_prices: Dictionary mapping dates to OHLCV data
+            lookback_days: Number of days requested
+
+        Returns:
+            PriceData object
+        """
+        # Sort dates chronologically and take most recent N days
+        all_dates = sorted(cached_prices.keys())
+        if len(all_dates) > lookback_days:
+            all_dates = all_dates[-lookback_days:]
+
+        dates = []
+        opens = []
+        highs = []
+        lows = []
+        closes = []
+        volumes = []
+
+        for date_str in all_dates:
+            day_data = cached_prices[date_str]
+            dates.append(date_str)
+            opens.append(day_data.get("open"))
+            highs.append(day_data.get("high"))
+            lows.append(day_data.get("low"))
+            closes.append(day_data.get("close"))
+            volumes.append(day_data.get("volume"))
+
+        return PriceData(
+            dates=dates,
+            opens=opens if all(o is not None for o in opens) else None,
+            highs=highs if all(h is not None for h in highs) else None,
+            lows=lows if all(l is not None for l in lows) else None,
+            closes=closes,
+            volumes=volumes if all(v is not None for v in volumes) else None,
+            adjusted_closes=None,
+            dividends=None,
+            split_coefficients=None
+        )
 
     def _call_time_series_daily(self, symbol: str) -> Dict[str, Any]:
         """
