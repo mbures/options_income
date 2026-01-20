@@ -36,12 +36,13 @@ Example:
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
 from .models import OptionContract, OptionsChain
 from .strike_optimizer import StrikeOptimizer, StrikeProfile
+from .utils import calculate_days_to_expiry
 
 logger = logging.getLogger(__name__)
 
@@ -354,7 +355,7 @@ class CoveredCallAnalyzer:
         warnings = []
 
         # Calculate days to expiry
-        days_to_expiry = self._calculate_days_to_expiry(contract.expiration_date)
+        days_to_expiry = calculate_days_to_expiry(contract.expiration_date)
 
         # Get premium (bid price)
         premium_per_share = contract.bid if contract.bid else 0.0
@@ -524,23 +525,6 @@ class CoveredCallAnalyzer:
         logger.info(f"Generated {len(results[:limit])} covered call recommendations")
         return results[:limit]
 
-    def _calculate_days_to_expiry(self, expiration_date: str) -> int:
-        """
-        Calculate calendar days until expiration.
-
-        Uses calendar days (not trading days) as this is the standard
-        convention for options pricing (Black-Scholes, IV term structure).
-
-        Example: Jan 19 to Jan 23 = 4 calendar days
-        """
-        try:
-            exp_date_obj = date.fromisoformat(expiration_date)
-            today = date.today()
-            days = (exp_date_obj - today).days
-            return max(1, days)
-        except (ValueError, TypeError):
-            return 30  # Default fallback
-
     def _add_liquidity_warnings(self, contract: OptionContract, warnings: list[str]) -> None:
         """Add warnings for liquidity issues."""
         if contract.open_interest is not None and contract.open_interest < MIN_OPEN_INTEREST:
@@ -639,7 +623,7 @@ class CoveredPutAnalyzer:
         warnings = []
 
         # Calculate days to expiry
-        days_to_expiry = self._calculate_days_to_expiry(contract.expiration_date)
+        days_to_expiry = calculate_days_to_expiry(contract.expiration_date)
 
         # Get premium (bid price)
         premium_per_share = contract.bid if contract.bid else 0.0
@@ -827,23 +811,6 @@ class CoveredPutAnalyzer:
 
         logger.info(f"Generated {len(results[:limit])} cash-secured put recommendations")
         return results[:limit]
-
-    def _calculate_days_to_expiry(self, expiration_date: str) -> int:
-        """
-        Calculate calendar days until expiration.
-
-        Uses calendar days (not trading days) as this is the standard
-        convention for options pricing (Black-Scholes, IV term structure).
-
-        Example: Jan 19 to Jan 23 = 4 calendar days
-        """
-        try:
-            exp_date_obj = date.fromisoformat(expiration_date)
-            today = date.today()
-            days = (exp_date_obj - today).days
-            return max(1, days)
-        except (ValueError, TypeError):
-            return 30  # Default fallback
 
     def _add_liquidity_warnings(self, contract: OptionContract, warnings: list[str]) -> None:
         """Add warnings for liquidity issues."""

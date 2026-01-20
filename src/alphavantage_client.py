@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from .cache import LocalFileCache
     from .config import AlphaVantageConfig
 
+from .utils import validate_price_data
 from .volatility import PriceData
 
 logger = logging.getLogger(__name__)
@@ -332,7 +333,7 @@ class AlphaVantageClient:
         )
 
         # Validate data quality
-        self._validate_price_data(opens, highs, lows, closes)
+        validate_price_data(opens, highs, lows, closes, symbol)
 
         return PriceData(
             dates=dates,
@@ -345,32 +346,6 @@ class AlphaVantageClient:
             dividends=None,
             split_coefficients=None,
         )
-
-    def _validate_price_data(self, opens: list, highs: list, lows: list, closes: list) -> None:
-        """
-        Validate price data quality.
-
-        Args:
-            opens: Opening prices
-            highs: High prices
-            lows: Low prices
-            closes: Closing prices
-
-        Raises:
-            ValueError: If data quality issues detected
-        """
-        for i in range(len(opens)):
-            if any(p <= 0 for p in [opens[i], highs[i], lows[i], closes[i]]):
-                raise ValueError(f"Non-positive price detected at index {i}")
-
-            if highs[i] < lows[i]:
-                raise ValueError(f"High < Low at index {i}: {highs[i]} < {lows[i]}")
-
-            if highs[i] / lows[i] > 1.5:
-                logger.warning(
-                    f"Large intraday range at index {i}: "
-                    f"high={highs[i]}, low={lows[i]} ({highs[i] / lows[i]:.2f}x)"
-                )
 
     def get_usage_status(self) -> dict[str, Any]:
         """

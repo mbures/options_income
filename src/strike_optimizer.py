@@ -31,6 +31,7 @@ from enum import Enum
 from typing import Any, Optional
 
 from .models import OptionContract, OptionsChain
+from .utils import calculate_days_to_expiry
 
 logger = logging.getLogger(__name__)
 
@@ -697,15 +698,7 @@ class StrikeOptimizer:
             return []
 
         # Calculate days to expiry (calendar days, not trading days)
-        # This is the standard convention for options pricing (Black-Scholes, IV)
-        from datetime import date
-
-        try:
-            exp_date_obj = date.fromisoformat(expiration_date)
-            today = date.today()
-            days_to_expiry = max(1, (exp_date_obj - today).days)
-        except (ValueError, TypeError):
-            days_to_expiry = 30  # Default fallback
+        days_to_expiry = calculate_days_to_expiry(expiration_date)
 
         recommendations = []
 

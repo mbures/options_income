@@ -32,12 +32,13 @@ Example:
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Optional
 
 from .models import OptionContract, OptionsChain
 from .strike_optimizer import StrikeOptimizer
+from .utils import calculate_days_to_expiry
 
 logger = logging.getLogger(__name__)
 
@@ -1256,15 +1257,7 @@ class OverlayScanner:
                 continue
 
             # Calculate days to expiry (calendar days, not trading days)
-            # Convention: DTE = expiration_date - today (using dates, not datetimes)
-            # This is the standard convention for options pricing (Black-Scholes, IV)
-            # Example: Jan 19 to Jan 23 = 4 calendar days
-            try:
-                exp_date_obj = date.fromisoformat(exp_date)
-                today = date.today()
-                days_to_expiry = max(1, (exp_date_obj - today).days)
-            except ValueError:
-                days_to_expiry = 7  # Default fallback
+            days_to_expiry = calculate_days_to_expiry(exp_date, default=7)
 
             # Get calls for this expiration
             exp_calls = [c for c in calls if c.expiration_date == exp_date]

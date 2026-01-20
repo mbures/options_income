@@ -22,6 +22,7 @@ from typing import Any
 import requests
 
 from .config import FinnhubConfig
+from .utils import validate_price_data
 from .volatility import PriceData
 
 # Configure logging
@@ -310,7 +311,7 @@ class FinnhubClient:
         )
 
         # Validate data quality
-        self._validate_price_data(filtered_opens, filtered_highs, filtered_lows, filtered_closes)
+        validate_price_data(filtered_opens, filtered_highs, filtered_lows, filtered_closes, symbol)
 
         return PriceData(
             dates=dates,
@@ -320,32 +321,6 @@ class FinnhubClient:
             closes=filtered_closes,
             volumes=filtered_volumes if filtered_volumes else None,
         )
-
-    def _validate_price_data(self, opens: list, highs: list, lows: list, closes: list) -> None:
-        """
-        Validate price data quality.
-
-        Args:
-            opens: Opening prices
-            highs: High prices
-            lows: Low prices
-            closes: Closing prices
-
-        Raises:
-            ValueError: If data quality issues detected
-        """
-        for i in range(len(opens)):
-            if any(p <= 0 for p in [opens[i], highs[i], lows[i], closes[i]]):
-                raise ValueError(f"Non-positive price detected at index {i}")
-
-            if highs[i] < lows[i]:
-                raise ValueError(f"High < Low at index {i}: {highs[i]} < {lows[i]}")
-
-            if highs[i] / lows[i] > 1.5:
-                logger.warning(
-                    f"Large intraday range at index {i}: "
-                    f"high={highs[i]}, low={lows[i]} ({highs[i] / lows[i]:.2f}x)"
-                )
 
     def get_earnings_calendar(self, symbol: str, from_date: str, to_date: str) -> list:
         """

@@ -41,6 +41,7 @@ from typing import Any, Optional
 from .models import OptionContract, OptionsChain
 from .overlay_scanner import EarningsCalendar
 from .strike_optimizer import StrikeOptimizer, StrikeProfile
+from .utils import calculate_days_to_expiry
 
 logger = logging.getLogger(__name__)
 
@@ -696,12 +697,7 @@ class LadderBuilder:
             week_number = week_idx + 1
 
             # Calculate DTE
-            try:
-                exp_date_obj = date.fromisoformat(exp_date)
-                today = date.today()
-                days_to_expiry = max(1, (exp_date_obj - today).days)
-            except ValueError:
-                days_to_expiry = 7 * week_number
+            days_to_expiry = calculate_days_to_expiry(exp_date, default=7 * week_number)
 
             # Adjust sigma for week
             sigma = self.adjust_sigma_for_week(week_number)
