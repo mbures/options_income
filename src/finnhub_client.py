@@ -361,6 +361,80 @@ class FinnhubClient:
                     f"high={highs[i]}, low={lows[i]} ({highs[i]/lows[i]:.2f}x)"
                 )
 
+    def get_earnings_calendar(
+        self,
+        symbol: str,
+        from_date: str,
+        to_date: str
+    ) -> list:
+        """
+        Fetch earnings calendar dates for a symbol.
+
+        Args:
+            symbol: Stock ticker symbol (e.g., "F", "AAPL")
+            from_date: Start date in YYYY-MM-DD format
+            to_date: End date in YYYY-MM-DD format
+
+        Returns:
+            List of earnings dates (YYYY-MM-DD format)
+
+        Raises:
+            FinnhubAPIError: If API request fails
+        """
+        symbol = symbol.upper().strip()
+
+        url = f"{self.config.base_url}/calendar/earnings"
+        params = {
+            "symbol": symbol,
+            "from": from_date,
+            "to": to_date,
+            "token": self.config.api_key
+        }
+
+        logger.info(f"Fetching earnings calendar for {symbol} from {from_date} to {to_date}")
+
+        try:
+            response = self._make_request_with_retry(url, params)
+
+            if response.status_code == 401:
+                raise FinnhubAPIError(
+                    "Authentication failed. Check your API key."
+                )
+            elif response.status_code == 429:
+                raise FinnhubAPIError(
+                    "Rate limit exceeded. Finnhub free tier allows 60 calls/minute."
+                )
+            elif response.status_code >= 500:
+                raise FinnhubAPIError(
+                    f"Finnhub server error (HTTP {response.status_code})."
+                )
+
+            response.raise_for_status()
+            data = response.json()
+
+            # Parse earnings dates from response
+            earnings_dates = []
+            earnings_calendar = data.get("earningsCalendar", [])
+            for entry in earnings_calendar:
+                if entry.get("symbol") == symbol:
+                    date = entry.get("date")
+                    if date:
+                        earnings_dates.append(date)
+
+            logger.info(f"Found {len(earnings_dates)} earnings dates for {symbol}")
+            return sorted(earnings_dates)
+
+        except requests.exceptions.Timeout as e:
+            raise FinnhubAPIError(
+                f"Request timeout after {self.config.timeout}s for earnings calendar {symbol}"
+            ) from e
+        except requests.exceptions.ConnectionError as e:
+            raise FinnhubAPIError(
+                f"Connection error fetching earnings for {symbol}"
+            ) from e
+        except requests.exceptions.RequestException as e:
+            raise FinnhubAPIError(f"Earnings API request failed: {str(e)}") from e
+
     def __enter__(self) -> "FinnhubClient":
         """Context manager entry."""
         return self

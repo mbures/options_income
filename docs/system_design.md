@@ -1,4 +1,66 @@
-"r") as f:
+# System Design Document (SDD)
+## Covered Options Strategy Optimization System
+
+**Version:** 2.1
+**Date:** January 18, 2026
+**Status:** Draft (Updated for Weekly Overlay Scanner)
+
+---
+
+## 1. Overview
+
+This document describes the architecture and module-level design for the Covered Options Strategy Optimization System. Version 2.1 adds a holdings-driven **weekly covered-call overlay scanner** that sizes trades using a configurable overwrite cap (default 25%), ranks opportunities on **net credit** after execution costs, and excludes earnings-week expirations by default.
+
+## 2. Architecture Summary
+
+### 2.1 High-Level Flow (Scanner Mode)
+
+1. Load portfolio holdings (`symbol`, `shares`, optional tax context)
+2. Fetch/compute market context (spot, vol, chain, events)
+3. Generate candidate covered calls in target **delta bands** for next 1–3 weekly expirations (skipping earnings weeks)
+4. Apply tradability filters and execution cost model to compute **net credit**
+5. Rank candidates and output:
+   - trade blotter (GO/CHECK/SKIP)
+   - per-trade broker checklist
+   - structured JSON payload for optional LLM decision memo
+
+### 2.2 Key Design Principles
+
+- **Broker-first execution**: the system scans and explains; the user executes at the broker.
+- **Hard event gates**: skip earnings weeks by default.
+- **Net economics**: rank by net credit after fees/slippage, not raw premium.
+- **Explainability**: emit rejection reasons for filtered strikes and surface data-quality warnings.
+
+## 3. Core Modules
+
+### 3.1 Configuration (`config.py`)
+
+Configuration extends existing API keys and caching settings with scanner settings:
+
+- `overwrite_cap_pct` (default 25.0)
+- `per_contract_fee` (tunable)
+- `slippage_model` (default `half_spread_capped`)
+- `skip_earnings_default` (default true)
+- delta-band presets (defensive/conservative/moderate/aggressive)
+
+### 3.2 Data Models (`models.py`)
+
+Additions for scanner mode:
+
+- `Holding(symbol, shares, cost_basis?, acquired_date?, account_type?)`
+- `ExecutionCostModel(per_contract_fee, slippage_model, min_net_credit)`
+- `EventRiskFlags(earnings_in_window, ex_div_in_window, dividend_unverified, early_exercise_risk)`
+- `TradabilityScore(spread_abs, spread_pct_mid, oi, volume, quote_age?, is_tradeable, reasons[])`
+- `TradeCandidate` (contract + computed metrics + sizing + warnings)
+- `TradeChecklistItem` and `TradeDecisionMemoPayload`
+
+### 3.3 Local File Cache (`cache.py`)
+
+The cache supports price and earnings calendar caching plus Alpha Vantage daily usage tracking.
+
+```python
+# (excerpt; leading lines omitted for brevity)
+with open(cache_path, "r") as f:
                 data = json.load(f)
             
             # Check expiry
@@ -76,7 +138,7 @@
         """Load API usage tracking data."""
         if self._usage_file.exists():
             try:
-                with open(self._usage_file, "r") as f:
+                with open(self._usage_file, with open(cache_path, "r") as f:
                     return json.load(f)
             except json.JSONDecodeError:
                 return {}
@@ -706,6 +768,61 @@ class LadderBuilder:
 ```
 
 ---
+
+
+### 3.9 Portfolio Overlay Scanner (`overlay_scanner.py`)
+
+**Purpose**: Generate weekly covered-call recommendations for existing holdings with controlled assignment risk.
+
+**Responsibilities**:
+- Load holdings list and compute contract sizing from overwrite cap
+- Enumerate next 1–3 weekly expirations; **exclude earnings weeks by default**
+- Select candidate calls using delta bands as primary risk control
+- Apply tradability filters (zero-bid removal, OI/volume/spread thresholds)
+- Apply execution cost model (fees + slippage) to compute net credit
+- Rank candidates and attach explicit rejection reasons for non-selected strikes
+
+**Ranking objective (default)**:
+- Maximize `net_premium_yield` subject to:
+  - delta within profile band
+  - event gates satisfied
+  - tradability thresholds satisfied
+
+### 3.10 Policy Engine (`policy_engine.py`)
+
+**Purpose**: Encapsulate default management rules and allow user overrides.
+
+**Default policy (configurable)**:
+- take-profit target (e.g., 70–90% of premium)
+- roll trigger: delta threshold and/or spot proximity to strike
+- do-not-trade rules: earnings weeks (default), optional dividend risk tightening
+
+### 3.11 Execution Checklist Generator (`execution_checklist.py`)
+
+**Purpose**: Produce broker-side validation steps per recommended trade.
+
+Checklist categories:
+- Liquidity/pricing verification (broker quote vs scanner; limit order guidance)
+- Event verification (earnings gate; ex-div confirmation; early exercise warning)
+- Costs (fees/slippage; net credit confirmation)
+- Position fit (contracts, overwrite cap, covered status)
+- Management plan reminders (TP/roll triggers)
+
+### 3.12 LLM Decision Memo Payload (`llm_memo.py`)
+
+**Purpose**: Emit a structured JSON payload that an LLM can summarize into a concise decision memo.
+
+**Design**:
+- The system generates deterministic JSON (inputs, computed metrics, warnings).
+- The LLM produces a narrative memo (rationale, risks, broker checks).
+- This step is optional and must not change trade math.
+
+### 3.13 Probability Conventions (`probability.py`)
+
+**Requirement**: Define probability semantics explicitly and enforce with unit tests.
+
+- Output `p_itm_model` (finish ITM probability) and `delta_chain` (market-implied proxy)
+- Ensure monotonicity and sign conventions are tested to prevent accidental inversion
 
 ## 4. Error Handling Strategy
 

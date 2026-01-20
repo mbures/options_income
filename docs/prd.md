@@ -1,10 +1,10 @@
 # Product Requirements Document (PRD)
 ## Covered Options Strategy Optimization System
 
-**Version:** 2.0  
-**Date:** January 15, 2026  
+**Version:** 2.1  
+**Date:** January 18, 2026  
 **Author:** Stock Quant  
-**Status:** Draft
+**Status:** Draft (Updated for Weekly Overlay Scanner)
 
 ---
 
@@ -28,6 +28,11 @@ This system will provide a foundation for:
 - **Options analysis**: Evaluating option pricing, liquidity, and risk metrics
 - **Portfolio management**: Monitoring and managing options positions
 
+
+**Primary operating mode (v2.1): Weekly Covered Call Overlay Scanner**
+
+The system’s default operating mode is a **weekly covered-call overlay** applied to existing equity holdings, sized via a **partial overwrite cap** (default 25%). The goal is to capture incremental option premium (“rent”) while **minimizing call-away frequency**, avoiding earnings weeks by default, and providing a broker-first, trade-by-trade verification workflow (execution checklist + optional LLM decision memo).
+
 ### 1.2 Key Objectives
 
 1. Establish reliable connections to Finnhub and Alpha Vantage APIs
@@ -38,6 +43,10 @@ This system will provide a foundation for:
 6. Provide event risk filtering (earnings, dividends)
 7. Implement local caching to minimize API calls
 
+8. Support a **weekly portfolio overlay scanner** workflow (holdings-driven), including overwrite sizing and tradability gating
+9. Optimize on **net premium** (after fees/slippage assumptions) and present a broker-first execution checklist for each candidate trade
+10. Enforce **earnings-week exclusion by default** and flag dividend-driven early exercise risk for covered calls
+
 ### 1.3 Success Metrics
 
 | Metric | Target | Measurement |
@@ -47,6 +56,10 @@ This system will provide a foundation for:
 | Strike recommendation precision | Nearest tradeable strike | Options chain validation |
 | Assignment probability accuracy | ±10% vs. actual outcomes | Backtesting over 1 year |
 | Premium capture rate | >90% of theoretical | Live trading results |
+| Net premium yield (after costs) | Positive, stable weekly capture | Net credit vs. assumptions (fees + slippage) |
+| Call-away frequency | Occasional / controlled | Assignments per symbol per year; % overwritten vs. called away |
+| Tradability / execution quality | High | % fills near mid; average spread paid; stale quote rate |
+| Operational load | Low | Roll/close frequency and estimated annual contract count |
 | System latency | <500ms for full calculation | Performance testing |
 | API efficiency | Minimize calls within rate limits | Usage tracking |
 
@@ -117,7 +130,74 @@ A Python application that interfaces with Finnhub and Alpha Vantage APIs to:
 
 ---
 
+## 2.4 Default Operating Model: Weekly Covered Call Overlay Scanner
+
+**Objective**: Generate incremental income (a few percent annualized contribution is a reasonable initial target) from existing equity holdings by selling short-dated covered calls, while controlling call-away risk via conservative selection and position sizing.
+
+**Default behavior**:
+
+- **Cadence**: Evaluate the next 1–3 weekly expirations (typically Friday weeklies).
+- **Earnings**: **Skip earnings weeks by default** (hard gate).
+- **Position sizing**: Apply an **overwrite cap** (tunable; default 25%) to compute contracts to sell based on shares held.
+- **Primary selector**: Use **option chain delta bands** as the primary risk control for weeklies; sigma-based strikes remain a diagnostic/secondary view.
+- **Optimization target**: Rank candidates by **net premium** after a configurable execution-cost model (fees + slippage), subject to tradability thresholds.
+- **Broker-first workflow**: The system is a scanner. The user executes trades at their broker with a per-trade checklist and (optionally) an LLM-generated decision memo.
+
+**Default management policy (configurable)**:
+
+- Take-profit: buy back after capturing a configurable portion of max profit (e.g., 70–90%).
+- Roll/defend trigger: if delta rises above a threshold (e.g., 0.30–0.35) or spot approaches strike (configurable proximity).
+- Avoid unnecessary churn: policies must incorporate fees/slippage and should not recommend micro-premium trades that are dominated by costs.
+
 ## 3. Functional Requirements
+
+### 3.0 Portfolio Overlay Scanner (Weekly)
+
+**FR-42: Portfolio Holdings Input**
+- System must accept a holdings list with at minimum: `symbol`, `shares`
+- Optional but recommended: `cost_basis`, `acquired_date`, `account_type` (taxable vs. qualified)
+- Validate that `shares` is a non-negative integer
+
+**FR-43: Overwrite Cap Sizing**
+- Provide parameter `overwrite_cap_pct` (default 25%, tunable)
+- Compute contracts to sell: `floor(shares * overwrite_cap_pct / 100 / 100)`
+- If result is 0, show as non-actionable rather than forcing 1 contract
+
+**FR-44: Execution Cost Model (Fees + Slippage)**
+- Provide tunable parameter `per_contract_fee` (platform-dependent)
+- Provide configurable slippage model (default: half-spread, capped)
+- All rankings must use **net credit** after estimated costs
+
+**FR-45: Earnings Week Exclusion (Hard Gate)**
+- By default, exclude any candidate whose option life spans an earnings date
+- Provide explicit override, but never silently include earnings-week trades
+
+**FR-46: Dividend / Ex-Dividend Verification and Early Exercise Flag (Calls)**
+- If ex-dividend date occurs before expiry, flag elevated early-exercise risk for covered calls when ITM with low extrinsic
+- If dividend data is unavailable from configured sources, mark the trade as **UNVERIFIED** and require user confirmation at execution time
+
+**FR-47: Delta-Band Risk Profiles (Primary for Weeklies)**
+- Provide delta-band presets (default example):
+  - Defensive: 0.05–0.10
+  - Conservative: 0.10–0.15
+  - Moderate: 0.15–0.25
+  - Aggressive: 0.25–0.35
+- Sigma-based profiles remain supported as secondary/diagnostic outputs
+
+**FR-48: Candidate Ranking and Rejection Reasons**
+- Rank candidates by net premium yield subject to delta band, tradability thresholds, and event gates
+- Trades rejected by filters must expose explicit reasons (e.g., zero bid, spread too wide, OI too low, stale quotes)
+
+**FR-49: Tradability Filters**
+- Filter out zero-bid/zero-premium contracts from top recommendations
+- Use both absolute and relative spread thresholds (e.g., $ spread and % of mid)
+- Use OI/volume thresholds and quote freshness when available
+
+**FR-50: Output: Trade Blotter + Broker Checklist + LLM Memo Payload**
+- Output a ranked list per symbol with: sizing (contracts), net credit, delta, P(ITM) metrics, event flags, and tradability
+- For each recommended trade, output a broker-first checklist (pricing, liquidity, event checks, sizing)
+- Provide a structured JSON payload for optional LLM decision memo generation (auditable)
+
 
 ### 3.1 Data Sources and API Integration
 
@@ -275,18 +355,22 @@ A Python application that interfaces with Finnhub and Alpha Vantage APIs to:
 - Return both theoretical and tradeable strikes
 
 **FR-24: Assignment Probability Estimation**
-- Calculate P(ITM at expiration) for each strike
-- Use Black-Scholes N(-d2) approximation for calls, N(d2) for puts
-- Provide delta as proxy for instantaneous assignment probability
-- Support Monte Carlo simulation for more accurate estimates (optional)
+- Calculate **finish ITM** probability at expiration using a clearly defined convention
+- System must output **both**:
+  - `p_itm_model`: model-based finish ITM probability (Black–Scholes digital proxy)
+  - `delta_chain`: delta from the options chain (market-implied near-term risk proxy)
+- The probability convention (risk-free drift vs. driftless) must be explicitly documented and consistent across code and docs
+- Include unit tests to prevent sign inversions and validate monotonicity (further OTM ⇒ lower finish ITM probability)
+- Support Monte Carlo simulation as an optional enhancement
 
 **FR-25: Strike Profile Selection**
-- Provide preset strike profiles with standard deviations:
-  - Aggressive: 0.5-1.0σ OTM (30-40% P(ITM))
-  - Moderate: 1.0-1.5σ OTM (15-30% P(ITM))
-  - Conservative: 1.5-2.0σ OTM (7-15% P(ITM))
-  - Defensive: 2.0-2.5σ OTM (2-7% P(ITM))
-- Allow custom σ input
+- Provide preset profiles for **weekly overlay** using delta bands (see FR-47)
+- Maintain sigma-based presets for compatibility and diagnostics:
+  - Aggressive: 0.5–1.0σ OTM (higher assignment likelihood)
+  - Moderate: 1.0–1.5σ OTM
+  - Conservative: 1.5–2.0σ OTM
+  - Defensive: 2.0–2.5σ OTM
+- Allow custom delta and/or sigma input
 
 **FR-26: Multi-Strike Recommendations**
 - Return array of candidate strikes with metrics
@@ -303,12 +387,11 @@ A Python application that interfaces with Finnhub and Alpha Vantage APIs to:
 - Calculate returns: if flat, if called, breakeven
 
 **FR-28: Covered Call Recommendations**
-- Recommend strikes based on user's risk profile
-- Consider liquidity (open interest > 100)
-- Flag wide bid-ask spreads (>10% of premium)
-- Warn if expiration spans earnings date
-
-### 3.6 Covered Put Strategy
+- Recommend strikes based on user's risk profile (delta band primary for weeklies)
+- Consider liquidity (open interest > threshold)
+- Flag wide bid-ask spreads (using both $ and % metrics)
+- **Exclude earnings-week expirations by default** (hard gate; override only with explicit user opt-in)
+- If ex-dividend date is within option life, flag elevated early exercise risk for covered calls
 
 **FR-29: Covered Put Analysis**
 - Identify OTM put strikes below current stock price
@@ -375,18 +458,21 @@ A Python application that interfaces with Finnhub and Alpha Vantage APIs to:
 ### 3.9 Risk Analysis
 
 **FR-38: Event Risk Filter**
-- Accept earnings date calendar (from Finnhub)
-- Accept dividend calendar (from Alpha Vantage)
+- Accept earnings date calendar (from Finnhub or alternative source)
+- Accept dividend/ex-div calendar (from configured source; may require premium or alternate provider)
 - Flag expirations that span earnings
-- Flag puts near ex-dividend dates (early assignment risk)
-- Warn user of elevated risk around events
-- Optionally exclude event weeks from ladder
+- **Default behavior**: exclude earnings-week expirations from recommendations
+- Flag ex-dividend dates inside option life for **covered call early exercise risk** and for put-related considerations
+- If dividend data is missing, mark as **UNVERIFIED** and require broker-side verification
 
 **FR-39: Income Metrics**
-- Calculate annualized yield: (Premium / Stock Price) × (365 / DTE)
-- Calculate return if flat: Premium / Stock Price
-- Calculate return if called/assigned: (Premium + (Strike - Stock Price)) / Stock Price
-- Calculate breakeven: Stock Price - Premium (for calls), Strike - Premium (for puts)
+- Calculate **net credit** = (estimated fill price × 100) − fees − estimated slippage
+- Calculate premium yield (per cycle): net_credit / (stock_price × 100)
+- Calculate **simple annualized premium rate**: (net_credit / (stock_price × 100)) × (365 / DTE)
+  - Label clearly as simple annualization (not realized; ignores downtime, rolls, and event skips)
+- Calculate return if flat: net_credit / (stock_price × 100)
+- Calculate return if called/assigned: (net_credit + (strike − stock_price)×100) / (stock_price × 100)
+- Calculate breakeven: stock_price − net_credit/100 (calls), strike − net_credit/100 (puts)
 
 **FR-40: Risk Metrics**
 - Calculate expected value: P(OTM) × Premium - P(ITM) × Opportunity Cost
@@ -649,6 +735,29 @@ A Python application that interfaces with Finnhub and Alpha Vantage APIs to:
 | ex_dividend_date | datetime | No | Alpha Vantage | Next ex-dividend date (derived) |
 | dividend_amount | float | No | Alpha Vantage | Expected dividend |
 
+
+#### 5.3.4 Portfolio and Execution Configuration (Scanner Inputs)
+
+**Holdings Input**
+
+| Field | Type | Required | Description |
+|------|------|----------|-------------|
+| symbol | str | Yes | Ticker symbol |
+| shares | int | Yes | Shares held (used to compute contract count) |
+| cost_basis | float | No | Average cost basis per share (taxable analytics) |
+| acquired_date | date | No | Acquisition date (holding period / tax context) |
+| account_type | str | Recommended | `taxable` or `qualified` (affects decision memo + warnings) |
+
+**Execution Cost Model**
+
+| Field | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| overwrite_cap_pct | float | Yes | 25.0 | Max % of shares to overwrite per symbol |
+| per_contract_fee | float | Yes | 0.65 | Broker commission/fee per contract (tunable) |
+| slippage_model | str | Yes | half_spread_capped | How to estimate fill vs. mid/bid |
+| min_net_credit | float | Yes | configurable | Minimum net credit per contract to recommend |
+| skip_earnings_default | bool | Yes | true | Exclude expirations spanning earnings |
+
 ### 5.4 Data Quality Considerations
 
 **Known Issues with Finnhub Options Data** (based on GitHub issue #545):
@@ -694,9 +803,11 @@ where:
 
 #### 5.5.3 Assignment Probability (Black-Scholes)
 
-**For Calls:** $P(S_T > K) = N(-d_2)$
+**For Calls:** $P(S_T > K) = N(d_2)$
 
-**For Puts:** $P(S_T < K) = N(d_2)$
+**For Puts:** $P(S_T < K) = N(-d_2)$
+
+**Note**: The system must explicitly document whether probabilities are computed under a risk-neutral drift (using $r$) or as a driftless heuristic. Unit tests must enforce a consistent convention across documentation and implementation.
 
 where:
 $$d_1 = \frac{\ln(S/K) + (r + \sigma^2/2)T}{\sigma\sqrt{T}}$$
@@ -704,61 +815,63 @@ $$d_2 = d_1 - \sigma\sqrt{T}$$
 
 ---
 
+
 ## 6. Implementation Phases
 
+> Note: Phase status reflects the **current codebase** and the v2.1 roadmap. Some features may be partially implemented but not yet production-ready due to data-source limitations (e.g., dividend/ex-div data on free tiers).
+
 ### Phase 1: Core Data Infrastructure ✓ (Completed)
-- ✓ Finnhub API connection and authentication
-- ✓ Basic options chain retrieval for single ticker
-- ✓ Data parsing and JSON output
-- ✓ Error handling with retry logic
-- ✓ Basic documentation and tests
+- Finnhub API connection and authentication
+- Options chain retrieval for single ticker
+- Data parsing and structured output
+- Error handling with retry logic
+- Basic documentation and tests
 
 ### Phase 2: Volatility Engine ✓ (Completed)
-- ✓ Close-to-close volatility calculator
-- ✓ Parkinson volatility calculator
-- ✓ Garman-Klass volatility calculator
-- ✓ Yang-Zhang volatility calculator
-- ✓ Volatility blending logic
-- ✓ Unit tests (33 tests, 91% coverage)
-- ✓ Integration helpers (IV extraction, term structure)
+- Multiple realized volatility estimators
+- Implied volatility extraction and term structure
+- Volatility blending and regime detection
+- Unit tests and end-to-end example
 
-### Phase 3: Alpha Vantage Integration & Caching (Current)
-- ☐ Alpha Vantage client module
-- ☐ TIME_SERIES_DAILY_ADJUSTED data retrieval
-- ☐ Dividend and split data extraction
-- ☐ Local file-based cache implementation
-- ☐ Cache-first data retrieval pattern
-- ☐ Daily cache refresh mechanism
-- ☐ API usage tracking and limits
+### Phase 3: Alpha Vantage Integration & Caching ✓ (Completed / Iterating)
+- Alpha Vantage client module (free tier compatible)
+- Local file-based cache implementation
+- Cache-first retrieval pattern + TTLs
+- API usage tracking and daily limits
+- **Roadmap**: dividends/splits/ex-div enhancements (may require premium or alternate data sources)
 
-### Phase 4: Strike Optimization
-- ☐ Strike-at-sigma calculator
-- ☐ Strike rounding to tradeable strikes
-- ☐ Assignment probability calculator (calls and puts)
-- ☐ Strike profile presets
-- ☐ Liquidity filtering
-- ☐ Strike recommendation engine
+### Phase 4: Strike Optimization ✓ (Completed / Refining)
+- Strike-at-sigma calculator
+- Strike rounding to tradeable strikes
+- Assignment probability outputs (model + chain delta)
+- Liquidity/spread gating + candidate ranking
+- **Roadmap**: probability-convention hardening + improved DTE handling for weeklies
 
-### Phase 5: Covered Options Strategies
-- ☐ Covered call analysis and recommendations
-- ☐ Covered put analysis and recommendations
-- ☐ Wheel strategy state tracking
-- ☐ Collateral calculations for puts
+### Phase 5: Covered Options Strategies ✓ (Completed / Refining)
+- Covered call analysis and recommendations
+- Cash-secured put analysis and recommendations
+- Wheel state tracking
+- Early assignment risk flags (extensible)
 
-### Phase 6: Ladder Builder
-- ☐ Weekly expiration detection
-- ☐ Position allocation strategies
-- ☐ Strike adjustment by week
-- ☐ Complete ladder generation
-- ☐ Earnings avoidance logic (using Finnhub calendar)
+### Phase 6: Weekly Overlay Scanner & Broker Workflow (Planned)
+- Holdings-driven scanning (`symbol`, `shares`) with overwrite-cap sizing
+- Delta-band primary selection for weekly calls
+- Earnings-week exclusion by default (hard gate)
+- Net-credit ranking using execution cost model (fees + slippage)
+- Broker-first checklist and optional LLM decision memo payload
 
-### Phase 7: Risk Analysis & Polish
-- ☐ Income metrics calculation
-- ☐ Risk metrics calculation
-- ☐ Scenario analysis engine
-- ☐ Event risk filtering (earnings, dividends)
-- ☐ Comprehensive documentation
-- ☐ Example notebooks
+### Phase 7: Ladder Builder (Planned)
+- Weekly expiration detection
+- Position allocation strategies
+- Strike adjustment by week
+- Ladder generation and aggregate metrics
+- Earnings avoidance integration
+
+### Phase 8: Risk Analysis & Polish (Planned)
+- Income metrics (net premium yield, flat/called outcomes)
+- Scenario analysis and risk metrics
+- Portfolio-level reporting and auditing
+- Comprehensive documentation and examples
 
 ---
 
@@ -1141,3 +1254,15 @@ The following ML enhancements are documented for future consideration but are **
 | Product Owner | | | |
 | Technical Lead | | | |
 | QA Lead | | | |
+
+
+### 10.2 Weekly Overlay Scanner (New Acceptance Criteria)
+
+| # | Criterion | Verification |
+|---|----------|--------------|
+| AC-36 | Accept holdings input and compute contracts from overwrite cap | Unit tests + integration test |
+| AC-37 | Exclude earnings-week expirations by default | Integration test with mocked earnings calendar |
+| AC-38 | Apply fees/slippage model and rank by net credit | Unit tests for net-credit math |
+| AC-39 | Filter out zero-bid/illiquid contracts from Top N | Unit tests with synthetic chains |
+| AC-40 | Emit explicit rejection reasons for filtered strikes | Unit tests on filter pipeline |
+| AC-41 | Generate per-trade broker checklist + LLM memo payload | Snapshot test of output schema |

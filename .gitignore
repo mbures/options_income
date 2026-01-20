@@ -4,6 +4,8 @@ config/finhub_api_key.txt
 finhub_api_key.txt
 alpha_vantage_api_key.txt
 
+.claude/*
+
 # Cache directory
 cache/
 

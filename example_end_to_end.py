@@ -13,6 +13,14 @@ This example demonstrates:
 6. Volatility regime analysis
 7. Strike optimization with sigma-based calculations
 8. Strike recommendations with assignment probabilities
+9. Covered strategies analysis (calls, puts, wheel)
+10. Weekly overlay scanner with portfolio holdings (NEW - Sprint 4)
+    - Holdings-driven covered call recommendations
+    - Overwrite cap sizing (default 25%)
+    - Earnings exclusion as hard gate
+    - Net credit ranking after execution costs
+    - Delta-band risk profiles
+    - Broker checklist generation
 
 Data Sources:
 - Historical OHLCV: Alpha Vantage TIME_SERIES_DAILY (free, 25 req/day)
@@ -34,6 +42,18 @@ from src.volatility_integration import (
     calculate_iv_term_structure
 )
 from src.strike_optimizer import StrikeOptimizer, StrikeProfile
+from src.covered_strategies import (
+    CoveredCallAnalyzer,
+    CoveredPutAnalyzer,
+    WheelStrategy,
+    WheelState,
+)
+from src.overlay_scanner import (
+    OverlayScanner,
+    PortfolioHolding,
+    ScannerConfig,
+    DeltaBand,
+)
 
 
 def main():
@@ -395,6 +415,180 @@ def main():
                         )
                 else:
                     print("  No recommendations found for conservative profile")
+
+                # Step 9: Covered Strategies Analysis
+                print("\n" + "-" * 70)
+                print("STEP 9: Covered Strategies Analysis (NEW)")
+                print("-" * 70)
+
+                # Initialize analyzers
+                call_analyzer = CoveredCallAnalyzer(optimizer)
+                put_analyzer = CoveredPutAnalyzer(optimizer)
+                wheel = WheelStrategy(call_analyzer, put_analyzer)
+
+                # Analyze covered call recommendations
+                print("\nCovered Call Analysis (Top 3):")
+                cc_recs = call_analyzer.get_recommendations(
+                    options_chain=options_chain,
+                    current_price=current_price,
+                    volatility=blended_result.volatility,
+                    expiration_date=nearest_exp,
+                    limit=3
+                )
+
+                if cc_recs:
+                    print(f"{'Strike':>8} {'Premium':>8} {'If Flat':>10} {'If Called':>10} {'Ann.Ret':>8}")
+                    print("-" * 50)
+                    for cc in cc_recs:
+                        print(
+                            f"${cc.contract.strike:>7.2f} "
+                            f"${cc.premium_per_share:>7.2f} "
+                            f"${cc.profit_if_flat:>9.2f} "
+                            f"${cc.max_profit:>9.2f} "
+                            f"{cc.annualized_return_if_flat*100:>7.1f}%"
+                        )
+                        if cc.warnings:
+                            print(f"         ⚠ {cc.warnings[0]}")
+                else:
+                    print("  No covered call recommendations available")
+
+                # Analyze cash-secured put recommendations
+                print("\nCash-Secured Put Analysis (Top 3):")
+                csp_recs = put_analyzer.get_recommendations(
+                    options_chain=options_chain,
+                    current_price=current_price,
+                    volatility=blended_result.volatility,
+                    expiration_date=nearest_exp,
+                    limit=3
+                )
+
+                if csp_recs:
+                    print(f"{'Strike':>8} {'Premium':>8} {'Collat':>9} {'Eff.Buy':>8} {'Ann.Ret':>8}")
+                    print("-" * 50)
+                    for csp in csp_recs:
+                        print(
+                            f"${csp.contract.strike:>7.2f} "
+                            f"${csp.premium_per_share:>7.2f} "
+                            f"${csp.collateral_required:>8.0f} "
+                            f"${csp.effective_purchase_price:>7.2f} "
+                            f"{csp.annualized_return_if_otm*100:>7.1f}%"
+                        )
+                        if csp.warnings:
+                            print(f"         ⚠ {csp.warnings[0]}")
+                else:
+                    print("  No cash-secured put recommendations available")
+
+                # Wheel strategy recommendation
+                print("\nWheel Strategy Recommendation:")
+                print("  Current State: CASH (looking to acquire shares)")
+
+                wheel_rec = wheel.get_recommendation(
+                    state=WheelState.CASH,
+                    options_chain=options_chain,
+                    current_price=current_price,
+                    volatility=blended_result.volatility,
+                    expiration_date=nearest_exp,
+                    profile=StrikeProfile.MODERATE
+                )
+
+                if wheel_rec:
+                    print(f"  Action: {wheel_rec.action.upper()}")
+                    print(f"  Rationale: {wheel_rec.rationale}")
+                else:
+                    print("  No wheel recommendation available")
+
+                # Step 10: Weekly Overlay Scanner
+                print("\n" + "-" * 70)
+                print("STEP 10: Weekly Overlay Scanner (NEW - Sprint 4)")
+                print("-" * 70)
+
+                # Create a sample portfolio
+                holdings = [
+                    PortfolioHolding(
+                        symbol=symbol,
+                        shares=500,
+                        cost_basis=current_price * 0.9,  # Example: 10% gain
+                        account_type="taxable"
+                    )
+                ]
+
+                # Configure scanner with conservative settings
+                scanner_config = ScannerConfig(
+                    overwrite_cap_pct=25.0,  # Only overwrite 25% of position
+                    per_contract_fee=0.65,
+                    delta_band=DeltaBand.CONSERVATIVE,  # Conservative 10-15% P(ITM)
+                    skip_earnings_default=True,
+                    min_net_credit=5.00
+                )
+
+                # Initialize scanner
+                with FinnhubClient(config) as scan_client:
+                    scanner = OverlayScanner(
+                        finnhub_client=scan_client,
+                        strike_optimizer=optimizer,
+                        config=scanner_config
+                    )
+
+                    # Scan the portfolio
+                    print(f"\nScanning portfolio with {len(holdings)} holdings:")
+                    print(f"  Settings: {scanner_config.overwrite_cap_pct:.0f}% overwrite cap, "
+                          f"{scanner_config.delta_band.value} delta band")
+
+                    scan_results = scanner.scan_portfolio(
+                        holdings=holdings,
+                        current_prices={symbol: current_price},
+                        options_chains={symbol: options_chain},
+                        volatilities={symbol: blended_result.volatility}
+                    )
+
+                    # Display scan results
+                    result = scan_results.get(symbol)
+                    if result and not result.error:
+                        print(f"\n✓ Scan complete for {symbol}:")
+                        print(f"  Shares: {result.shares_held}")
+                        print(f"  Contracts available: {result.contracts_available}")
+                        print(f"  Earnings conflict: {'Yes' if result.has_earnings_conflict else 'No'}")
+
+                        if result.recommended_strikes:
+                            print(f"\n  Top Recommendations (ranked by net credit):")
+                            print(f"  {'Strike':>8} {'Exp':>12} {'Delta':>6} {'Net $':>8} {'Yield':>7} {'OI':>7}")
+                            print("  " + "-" * 58)
+
+                            for strike in result.recommended_strikes[:3]:
+                                print(
+                                    f"  ${strike.strike:>7.2f} "
+                                    f"{strike.expiration_date:>12} "
+                                    f"{strike.delta:>5.2f} "
+                                    f"${strike.total_net_credit:>7.2f} "
+                                    f"{strike.annualized_yield_pct:>6.1f}% "
+                                    f"{strike.open_interest:>6}"
+                                )
+
+                            # Show broker checklist for top recommendation
+                            if result.broker_checklist:
+                                print("\n  Broker Checklist (Top Recommendation):")
+                                checklist = result.broker_checklist
+                                print(f"    Action: {checklist.action}")
+                                print(f"    Contracts: {checklist.contracts}")
+                                print(f"    Strike: ${checklist.strike:.2f}")
+                                print(f"    Expiration: {checklist.expiration}")
+                                print(f"    Limit Price: ${checklist.limit_price:.2f}")
+                                print(f"    Min Credit: ${checklist.min_acceptable_credit:.2f}")
+                                print(f"    Verification steps: {len(checklist.checks)}")
+                        else:
+                            print("\n  No recommendations - all strikes filtered out")
+                            if result.rejected_strikes:
+                                print(f"  Rejected {len(result.rejected_strikes)} strikes")
+                                # Show rejection reasons
+                                rejection_counts = {}
+                                for strike in result.rejected_strikes:
+                                    for reason in strike.rejection_reasons:
+                                        rejection_counts[reason.value] = rejection_counts.get(reason.value, 0) + 1
+                                print("  Rejection reasons:")
+                                for reason, count in sorted(rejection_counts.items(), key=lambda x: -x[1])[:3]:
+                                    print(f"    • {reason}: {count}")
+                    elif result and result.error:
+                        print(f"\n  ⚠ Error: {result.error}")
 
             # Final summary
             print("\n" + "=" * 70)

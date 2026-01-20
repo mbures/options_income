@@ -1,8 +1,8 @@
 # Implementation Plan
 ## Covered Options Strategy Optimization System
 
-**Version:** 1.0
-**Date:** January 15, 2026
+**Version:** 1.4
+**Date:** January 19, 2026
 **Status:** Active
 
 ---
@@ -21,9 +21,10 @@ This document tracks the implementation progress of the Covered Options Strategy
 | Phase 2 | Volatility Engine | ✅ Complete | 100% |
 | Phase 3 | Alpha Vantage Integration & Caching | ✅ Complete | 100% |
 | Phase 4 | Strike Optimization | ✅ Complete | 100% |
-| Phase 5 | Covered Options Strategies | ⬜ Not Started | 0% |
-| Phase 6 | Ladder Builder | ⬜ Not Started | 0% |
-| Phase 7 | Risk Analysis & Polish | ⬜ Not Started | 0% |
+| Phase 5 | Covered Options Strategies | ✅ Complete | 100% |
+| Phase 6 | Weekly Overlay Scanner & Broker Workflow | ✅ Complete | 100% |
+| Phase 7 | Ladder Builder | ⬜ Not Started | 0% |
+| Phase 8 | Risk Analysis & Polish | ⬜ Not Started | 0% |
 
 ---
 
@@ -90,7 +91,7 @@ This document tracks the implementation progress of the Covered Options Strategy
 
 #### S2.3: Assignment Probability Calculator (3 pts) ✅
 - [x] **S2.3.1**: Implement `calculate_assignment_probability()` method
-- [x] **S2.3.2**: Implement Black-Scholes N(-d2) for calls, N(d2) for puts
+- [x] **S2.3.2**: Implement finish ITM probability with explicit convention (default: calls N(d2), puts N(-d2)); add regression tests to prevent sign inversion; expose both p_itm_model and delta_chain
 - [x] **S2.3.3**: Create `_norm_cdf()` helper using `math.erf`
 - [x] **S2.3.4**: Return delta as proxy for instantaneous probability
 - [x] **S2.3.5**: Create `ProbabilityResult` dataclass
@@ -113,139 +114,176 @@ This document tracks the implementation progress of the Covered Options Strategy
 
 ---
 
-### Sprint 3: Phase 5 - Covered Options Strategies (Est. 8 story points)
+### Sprint 3: Phase 5 - Covered Options Strategies (Est. 8 story points) ✅ COMPLETE
 
 **Goal**: Implement covered call, covered put, and wheel strategy support.
 
-#### S3.1: Covered Call Analysis (3 pts)
-- [ ] **S3.1.1**: Create `src/covered_strategies.py` module
-- [ ] **S3.1.2**: Implement `CoveredCallAnalyzer` class
-- [ ] **S3.1.3**: Identify OTM call strikes above current price
-- [ ] **S3.1.4**: Calculate premium income (bid prices)
-- [ ] **S3.1.5**: Calculate returns: if flat, if called, breakeven
-- [ ] **S3.1.6**: Integrate with strike optimizer for recommendations
-- [ ] **S3.1.7**: Flag wide bid-ask spreads (>10% of premium)
-- [ ] **S3.1.8**: Warn if expiration spans earnings date
-- [ ] **S3.1.9**: Create `CoveredCallResult` dataclass
+#### S3.1: Covered Call Analysis (3 pts) ✅
+- [x] **S3.1.1**: Create `src/covered_strategies.py` module
+- [x] **S3.1.2**: Implement `CoveredCallAnalyzer` class
+- [x] **S3.1.3**: Identify OTM call strikes above current price
+- [x] **S3.1.4**: Calculate premium income (bid prices)
+- [x] **S3.1.5**: Calculate returns: if flat, if called, breakeven
+- [x] **S3.1.6**: Integrate with strike optimizer for recommendations
+- [x] **S3.1.7**: Flag wide bid-ask spreads (>10% of premium)
+- [x] **S3.1.8**: Warn if expiration spans earnings date
+- [x] **S3.1.9**: Create `CoveredCallResult` dataclass
 
 **PRD Requirements**: FR-27, FR-28
 
-#### S3.2: Covered Put Analysis (3 pts)
-- [ ] **S3.2.1**: Implement `CoveredPutAnalyzer` class
-- [ ] **S3.2.2**: Identify OTM put strikes below current price
-- [ ] **S3.2.3**: Calculate collateral requirement (strike × 100)
-- [ ] **S3.2.4**: Calculate returns: if OTM (premium), if assigned (effective purchase price)
-- [ ] **S3.2.5**: Flag early assignment risk for deep ITM puts near ex-dividend
-- [ ] **S3.2.6**: Warn if expiration spans earnings or ex-dividend date
-- [ ] **S3.2.7**: Create `CoveredPutResult` dataclass
+#### S3.2: Covered Put Analysis (3 pts) ✅
+- [x] **S3.2.1**: Implement `CoveredPutAnalyzer` class
+- [x] **S3.2.2**: Identify OTM put strikes below current price
+- [x] **S3.2.3**: Calculate collateral requirement (strike × 100)
+- [x] **S3.2.4**: Calculate returns: if OTM (premium), if assigned (effective purchase price)
+- [x] **S3.2.5**: Flag early assignment risk for deep ITM puts near ex-dividend
+- [x] **S3.2.6**: Warn if expiration spans earnings or ex-dividend date
+- [x] **S3.2.7**: Create `CoveredPutResult` dataclass
 
 **PRD Requirements**: FR-29, FR-30, FR-31
 
-#### S3.3: Wheel Strategy Support (2 pts)
-- [ ] **S3.3.1**: Implement `WheelStrategy` class
-- [ ] **S3.3.2**: Track current state: Cash (sell puts) vs. Shares (sell calls)
-- [ ] **S3.3.3**: Recommend appropriate strategy based on current holdings
-- [ ] **S3.3.4**: Calculate cycle metrics (total premium, average cost basis)
-- [ ] **S3.3.5**: Create `WheelState` and `WheelRecommendation` dataclasses
+#### S3.3: Wheel Strategy Support (2 pts) ✅
+- [x] **S3.3.1**: Implement `WheelStrategy` class
+- [x] **S3.3.2**: Track current state: Cash (sell puts) vs. Shares (sell calls)
+- [x] **S3.3.3**: Recommend appropriate strategy based on current holdings
+- [x] **S3.3.4**: Calculate cycle metrics (total premium, average cost basis)
+- [x] **S3.3.5**: Create `WheelState` and `WheelRecommendation` dataclasses
 
 **PRD Requirements**: FR-32, FR-33
 
 ---
 
-### Sprint 4: Phase 6 - Ladder Builder (Est. 8 story points)
+
+
+### Sprint 4: Phase 6 - Weekly Overlay Scanner & Broker Workflow (Est. 10 story points) ✅ COMPLETE
+
+**Goal**: Deliver holdings-driven weekly covered-call overlay recommendations sized by overwrite cap (default 25%), ranked by net credit after costs, with earnings-week exclusion by default and broker-first execution artifacts.
+
+#### S4.1: Holdings Input & Overwrite Sizing (2 pts) ✅
+- [x] **S4.1.1**: Add `Holding` model (`symbol`, `shares`, optional tax fields)
+- [x] **S4.1.2**: Add `overwrite_cap_pct` config (default 25%)
+- [x] **S4.1.3**: Compute `contracts_to_sell = floor(shares * cap / 100 / 100)`
+- [x] **S4.1.4**: Ensure non-actionable positions (0 contracts) are surfaced clearly
+
+#### S4.2: Earnings Exclusion as Hard Gate (2 pts) ✅
+- [x] **S4.2.1**: Implement/verify earnings calendar retrieval (Finnhub)
+- [x] **S4.2.2**: Add function `expiry_spans_earnings()` and exclude by default
+- [x] **S4.2.3**: Add unit/integration tests with mocked earnings dates
+
+#### S4.3: Execution Cost Model (Fees + Slippage) and Net Credit (2 pts) ✅
+- [x] **S4.3.1**: Add tunable `per_contract_fee` parameter
+- [x] **S4.3.2**: Implement slippage model (default half-spread capped)
+- [x] **S4.3.3**: Compute and store `net_credit` and `net_premium_yield`
+- [x] **S4.3.4**: Update ranking to use net metrics
+
+#### S4.4: Delta-Band Selection + Tradability Filters (3 pts) ✅
+- [x] **S4.4.1**: Add delta-band presets (defensive/conservative/moderate/aggressive)
+- [x] **S4.4.2**: Select candidate calls by delta band (primary for weeklies)
+- [x] **S4.4.3**: Filter out zero-bid/zero-premium strikes from Top N
+- [x] **S4.4.4**: Improve spread filtering with absolute + relative thresholds
+- [x] **S4.4.5**: Emit explicit rejection reasons for filtered strikes
+
+#### S4.5: Broker Checklist + LLM Memo Payload (1 pt) ✅
+- [x] **S4.5.1**: Generate per-trade broker checklist output
+- [x] **S4.5.2**: Emit structured JSON payload for optional LLM memo generation
+
+**PRD Requirements**: FR-42 to FR-50, FR-45, FR-46
+
+
+### Sprint 5: Phase 7 - Ladder Builder (Est. 8 story points)
 
 **Goal**: Implement laddered position building across multiple weekly expirations.
 
-#### S4.1: Weekly Expiration Detection (2 pts)
-- [ ] **S4.1.1**: Create `src/ladder_builder.py` module
-- [ ] **S4.1.2**: Implement `LadderBuilder` class
-- [ ] **S4.1.3**: Implement `get_weekly_expirations()` method
-- [ ] **S4.1.4**: Handle standard weekly options (Friday expiry)
-- [ ] **S4.1.5**: Handle Wednesday/Monday weeklies if present
-- [ ] **S4.1.6**: Filter out past expirations
+#### S5.1: Weekly Expiration Detection (2 pts)
+- [ ] **S5.1.1**: Create `src/ladder_builder.py` module
+- [ ] **S5.1.2**: Implement `LadderBuilder` class
+- [ ] **S5.1.3**: Implement `get_weekly_expirations()` method
+- [ ] **S5.1.4**: Handle standard weekly options (Friday expiry)
+- [ ] **S5.1.5**: Handle Wednesday/Monday weeklies if present
+- [ ] **S5.1.6**: Filter out past expirations
 
 **PRD Requirements**: FR-34
 
-#### S4.2: Position Allocation Strategies (2 pts)
-- [ ] **S4.2.1**: Create `AllocationStrategy` enum (Equal, FrontWeighted, BackWeighted)
-- [ ] **S4.2.2**: Implement `_calculate_allocations()` method
-- [ ] **S4.2.3**: Equal: 100/N shares per week
-- [ ] **S4.2.4**: Front-weighted: More in near-term expirations
-- [ ] **S4.2.5**: Back-weighted: More in far-term expirations
-- [ ] **S4.2.6**: Ensure allocations sum to total position size
+#### S5.2: Position Allocation Strategies (2 pts)
+- [ ] **S5.2.1**: Create `AllocationStrategy` enum (Equal, FrontWeighted, BackWeighted)
+- [ ] **S5.2.2**: Implement `_calculate_allocations()` method
+- [ ] **S5.2.3**: Equal: 100/N shares per week
+- [ ] **S5.2.4**: Front-weighted: More in near-term expirations
+- [ ] **S5.2.5**: Back-weighted: More in far-term expirations
+- [ ] **S5.2.6**: Ensure allocations sum to total position size
 
 **PRD Requirements**: FR-35
 
-#### S4.3: Strike Adjustment by Week (2 pts)
-- [ ] **S4.3.1**: Implement `_adjust_sigma_for_week()` method
-- [ ] **S4.3.2**: Near-term (Week 1): n - 0.25σ (slightly more aggressive)
-- [ ] **S4.3.3**: Mid-term (Week 2-3): Baseline σ
-- [ ] **S4.3.4**: Far-term (Week 4+): n + 0.25σ (slightly more conservative)
-- [ ] **S4.3.5**: Document rationale in code comments
+#### S5.3: Strike Adjustment by Week (2 pts)
+- [ ] **S5.3.1**: Implement `_adjust_sigma_for_week()` method
+- [ ] **S5.3.2**: Near-term (Week 1): n - 0.25σ (slightly more aggressive)
+- [ ] **S5.3.3**: Mid-term (Week 2-3): Baseline σ
+- [ ] **S5.3.4**: Far-term (Week 4+): n + 0.25σ (slightly more conservative)
+- [ ] **S5.3.5**: Document rationale in code comments
 
 **PRD Requirements**: FR-36
 
-#### S4.4: Complete Ladder Generation (2 pts)
-- [ ] **S4.4.1**: Implement `build_ladder()` method
-- [ ] **S4.4.2**: Create `LadderLeg` dataclass with all fields
-- [ ] **S4.4.3**: Create `LadderResult` dataclass with summary metrics
-- [ ] **S4.4.4**: Integrate earnings calendar for automatic avoidance
-- [ ] **S4.4.5**: Return complete ladder specification with warnings
-- [ ] **S4.4.6**: Calculate aggregate metrics (total premium, weighted averages)
+#### S5.4: Complete Ladder Generation (2 pts)
+- [ ] **S5.4.1**: Implement `build_ladder()` method
+- [ ] **S5.4.2**: Create `LadderLeg` dataclass with all fields
+- [ ] **S5.4.3**: Create `LadderResult` dataclass with summary metrics
+- [ ] **S5.4.4**: Integrate earnings calendar for automatic avoidance
+- [ ] **S5.4.5**: Return complete ladder specification with warnings
+- [ ] **S5.4.6**: Calculate aggregate metrics (total premium, weighted averages)
 
 **PRD Requirements**: FR-37, FR-38
 
 ---
 
-### Sprint 5: Phase 7 - Risk Analysis & Polish (Est. 10 story points)
+### Sprint 6: Phase 8 - Risk Analysis & Polish (Est. 10 story points)
 
 **Goal**: Implement income/risk metrics, scenario analysis, and finalize documentation.
 
-#### S5.1: Income Metrics Calculation (2 pts)
-- [ ] **S5.1.1**: Create `src/risk_analyzer.py` module
-- [ ] **S5.1.2**: Implement `RiskAnalyzer` class
-- [ ] **S5.1.3**: Calculate annualized yield: (Premium / Stock Price) × (365 / DTE)
-- [ ] **S5.1.4**: Calculate return if flat: Premium / Stock Price
-- [ ] **S5.1.5**: Calculate return if called/assigned
-- [ ] **S5.1.6**: Calculate breakeven prices
+#### S6.1: Income Metrics Calculation (2 pts)
+- [ ] **S6.1.1**: Create `src/risk_analyzer.py` module
+- [ ] **S6.1.2**: Implement `RiskAnalyzer` class
+- [ ] **S6.1.3**: Calculate annualized yield: (Premium / Stock Price) × (365 / DTE)
+- [ ] **S6.1.4**: Calculate return if flat: Premium / Stock Price
+- [ ] **S6.1.5**: Calculate return if called/assigned
+- [ ] **S6.1.6**: Calculate breakeven prices
 
 **PRD Requirements**: FR-39
 
-#### S5.2: Risk Metrics Calculation (2 pts)
-- [ ] **S5.2.1**: Calculate expected value: P(OTM) × Premium - P(ITM) × Opportunity Cost
-- [ ] **S5.2.2**: Implement opportunity cost estimation (with price target input)
-- [ ] **S5.2.3**: Calculate risk-adjusted return (Sharpe-like ratio)
-- [ ] **S5.2.4**: Calculate downside protection percentage
+#### S6.2: Risk Metrics Calculation (2 pts)
+- [ ] **S6.2.1**: Calculate expected value: P(OTM) × Premium - P(ITM) × Opportunity Cost
+- [ ] **S6.2.2**: Implement opportunity cost estimation (with price target input)
+- [ ] **S6.2.3**: Calculate risk-adjusted return (Sharpe-like ratio)
+- [ ] **S6.2.4**: Calculate downside protection percentage
 
 **PRD Requirements**: FR-40
 
-#### S5.3: Scenario Analysis Engine (2 pts)
-- [ ] **S5.3.1**: Implement `calculate_scenarios()` method
-- [ ] **S5.3.2**: Calculate outcomes at: -10%, -5%, ATM, Strike, +5%, +10%
-- [ ] **S5.3.3**: Compare to buy-and-hold scenarios
-- [ ] **S5.3.4**: Support custom scenario inputs
-- [ ] **S5.3.5**: Create `ScenarioResult` dataclass
+#### S6.3: Scenario Analysis Engine (2 pts)
+- [ ] **S6.3.1**: Implement `calculate_scenarios()` method
+- [ ] **S6.3.2**: Calculate outcomes at: -10%, -5%, ATM, Strike, +5%, +10%
+- [ ] **S6.3.3**: Compare to buy-and-hold scenarios
+- [ ] **S6.3.4**: Support custom scenario inputs
+- [ ] **S6.3.5**: Create `ScenarioResult` dataclass
 
 **PRD Requirements**: FR-41
 
-#### S5.4: Earnings Calendar Integration (2 pts)
-- [ ] **S5.4.1**: Implement Finnhub earnings calendar retrieval
-- [ ] **S5.4.2**: Add to `FinnhubClient.get_earnings_calendar()` method
-- [ ] **S5.4.3**: Cache earnings data (weekly refresh)
-- [ ] **S5.4.4**: Create `EarningsEvent` dataclass
-- [ ] **S5.4.5**: Integrate with ladder builder for earnings avoidance
+#### S6.4: Earnings Calendar Integration (2 pts)
+- [ ] **S6.4.1**: Implement Finnhub earnings calendar retrieval
+- [ ] **S6.4.2**: Add to `FinnhubClient.get_earnings_calendar()` method
+- [ ] **S6.4.3**: Cache earnings data (weekly refresh)
+- [ ] **S6.4.4**: Create `EarningsEvent` dataclass
+- [ ] **S6.4.5**: Integrate with ladder builder for earnings avoidance
 
 **PRD Requirements**: FR-3, FR-38
 
-#### S5.5: Documentation & Final Polish (2 pts)
-- [ ] **S5.5.1**: Update README with complete setup instructions
-- [ ] **S5.5.2**: Create API authentication guide (Finnhub and Alpha Vantage)
-- [ ] **S5.5.3**: Ensure all functions have docstrings and type hints
-- [ ] **S5.5.4**: Create usage examples for all features
-- [ ] **S5.5.5**: Document known limitations and disclaimers
-- [ ] **S5.5.6**: Run full test suite and achieve >90% coverage
-- [ ] **S5.5.7**: Run pylint and achieve >9.0 score
-- [ ] **S5.5.8**: Performance validation (<500ms for full calculation)
+#### S6.5: Documentation & Final Polish (2 pts)
+- [ ] **S6.5.1**: Update README with complete setup instructions
+- [ ] **S6.5.2**: Create API authentication guide (Finnhub and Alpha Vantage)
+- [ ] **S6.5.3**: Ensure all functions have docstrings and type hints
+- [ ] **S6.5.4**: Create usage examples for all features
+- [ ] **S6.5.5**: Document known limitations and disclaimers
+- [ ] **S6.5.6**: Run full test suite and achieve >90% coverage
+- [ ] **S6.5.7**: Run pylint and achieve >9.0 score
+- [ ] **S6.5.8**: Performance validation (<500ms for full calculation)
 
 **PRD Requirements**: NFR-11, NFR-12, NFR-13
 
@@ -302,10 +340,11 @@ This document tracks the implementation progress of the Covered Options Strategy
 | `src/volatility.py` | 90% | 95% | |
 | `src/price_fetcher.py` | 53% | 95% | Needs more tests for new features |
 | `src/strike_optimizer.py` | 91% | 90% | ✅ Exceeds target |
-| `src/covered_strategies.py` | N/A | 90% | Not yet created |
+| `src/covered_strategies.py` | 87% | 90% | ✅ Near target |
+| `src/overlay_scanner.py` | 94% | 90% | ✅ Exceeds target |
 | `src/ladder_builder.py` | N/A | 90% | Not yet created |
 | `src/risk_analyzer.py` | N/A | 90% | Not yet created |
-| **Overall** | 67% | **>90%** | 219 tests passing |
+| **Overall** | 74% | **>90%** | 339 tests passing |
 
 ---
 
@@ -351,10 +390,24 @@ This document tracks the implementation progress of the Covered Options Strategy
 
 | # | Criterion | Status |
 |---|-----------|--------|
-| AC-22 | Generate covered call recommendations | ⬜ |
-| AC-23 | Generate covered put recommendations | ⬜ |
-| AC-24 | Calculate collateral requirements for puts | ⬜ |
-| AC-25 | Flag early assignment risk for puts | ⬜ |
+| AC-22 | Generate covered call recommendations | ✅ |
+| AC-23 | Generate covered put recommendations | ✅ |
+| AC-24 | Calculate collateral requirements for puts | ✅ |
+| AC-25 | Flag early assignment risk for puts | ✅ |
+
+
+### Weekly Overlay Scanner & Broker Workflow (AC-36 to AC-43)
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| AC-36 | Accept holdings input and compute contracts from overwrite cap | ✅ |
+| AC-37 | Exclude earnings-week expirations by default (hard gate) | ✅ |
+| AC-38 | Select weekly calls by delta-band presets | ✅ |
+| AC-39 | Compute net credit using fee + slippage model | ✅ |
+| AC-40 | Filter out zero-bid contracts; enforce spread/OI thresholds | ✅ |
+| AC-41 | Emit explicit rejection reasons for filtered strikes | ✅ |
+| AC-42 | Output per-trade broker checklist | ✅ |
+| AC-43 | Emit structured JSON payload for optional LLM memo | ✅ |
 
 ### Ladder Builder (AC-26 to AC-30)
 
@@ -390,9 +443,11 @@ This document tracks the implementation progress of the Covered Options Strategy
 
 ## Notes
 
-- All tests currently pass (219 tests)
+- All tests currently pass (339 tests)
 - Basic end-to-end workflow functional (`example_end_to_end.py`)
-- Sprint 2 complete: Strike Optimization module with 51 new tests
+- Sprint 2 complete: Strike Optimization module with 53 tests
+- Sprint 3 complete: Covered Strategies module with 48 tests
+- Sprint 4 complete: Overlay Scanner module with 70 tests
 - Fixed critical IV conversion bug (Finnhub returns IV as percentage, not decimal)
 - Cache system refactored to unified `market_data` table
 - Each sprint deliverable should include updated unit tests
@@ -406,3 +461,5 @@ This document tracks the implementation progress of the Covered Options Strategy
 | 1.0 | 2026-01-15 | Software Developer | Initial implementation plan |
 | 1.1 | 2026-01-16 | Software Developer | Sprint 1 complete: LocalFileCache, TIME_SERIES_DAILY_ADJUSTED, API usage tracking |
 | 1.2 | 2026-01-18 | Software Developer | Sprint 2 complete: StrikeOptimizer module with sigma calculations, assignment probability, and strike recommendations. Fixed IV normalization bug. Cache refactored to unified market_data table. |
+| 1.3 | 2026-01-18 | Software Developer | Added Phase 6: Weekly Overlay Scanner & broker-first workflow (overwrite sizing, earnings exclusion hard gate, net-credit ranking, tradability filters, checklist + LLM memo payload). Shifted Ladder to Phase 7 and Risk Analysis to Phase 8. |
+| 1.4 | 2026-01-19 | Software Developer | Sprint 4 complete: Overlay Scanner module fully implemented with 70 tests and 94% coverage. All Sprint 4 acceptance criteria met. |
