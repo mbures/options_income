@@ -283,10 +283,15 @@ class TestScannerConfig:
         with pytest.raises(ValueError, match="per_contract_fee must be non-negative"):
             ScannerConfig(per_contract_fee=-1)
 
-    def test_negative_min_credit_raises(self):
-        """Test that negative min credit raises error."""
-        with pytest.raises(ValueError, match="min_net_credit must be non-negative"):
-            ScannerConfig(min_net_credit=-5)
+    def test_negative_yield_raises(self):
+        """Test that negative min yield raises error."""
+        with pytest.raises(ValueError, match="min_weekly_yield_bps must be non-negative"):
+            ScannerConfig(min_weekly_yield_bps=-5)
+
+    def test_low_friction_multiple_raises(self):
+        """Test that friction multiple below 1 raises error."""
+        with pytest.raises(ValueError, match="min_friction_multiple must be >= 1"):
+            ScannerConfig(min_friction_multiple=0.5)
 
 
 # =============================================================================
@@ -626,11 +631,18 @@ class TestTradabilityFilters:
         assert vol_detail.actual_value == 5
         assert vol_detail.threshold == 10
 
-    def test_low_net_credit_rejection(self, scanner, sample_option_contract):
-        """Test that low net credit is rejected."""
+    def test_friction_too_high_rejection(self, scanner, sample_option_contract):
+        """Test that high friction relative to premium is rejected.
+
+        When net_credit < min_friction_multiple * (commission + slippage),
+        the trade is rejected because costs consume too much of the premium.
+        """
+        # friction = 0.65 + 5.0 = 5.65
+        # min_credit_for_friction = 2.0 * 5.65 = 11.30
+        # net_credit = 4.35 < 11.30 → REJECTED
         cost = ExecutionCostEstimate(
             gross_premium=10.0, commission=0.65, slippage=5.0,
-            net_credit=4.35,  # Below $5 threshold
+            net_credit=4.35,
             net_credit_per_share=0.0435
         )
         candidate = CandidateStrike(
@@ -650,16 +662,61 @@ class TestTradabilityFilters:
             cost_estimate=cost,
             delta_band=DeltaBand.CONSERVATIVE,
             contracts_to_sell=1,
-            total_net_credit=4.35,  # Too low
+            total_net_credit=4.35,
             annualized_yield_pct=1.0,
             days_to_expiry=7
         )
 
         reasons, details = scanner.apply_tradability_filters(candidate)
-        assert RejectionReason.NET_CREDIT_TOO_LOW in reasons
-        credit_detail = next(d for d in details if d.reason == RejectionReason.NET_CREDIT_TOO_LOW)
-        assert credit_detail.actual_value == 4.35
-        assert credit_detail.threshold == 5.0
+        assert RejectionReason.FRICTION_TOO_HIGH in reasons
+        friction_detail = next(d for d in details if d.reason == RejectionReason.FRICTION_TOO_HIGH)
+        assert friction_detail.actual_value == 4.35  # net_credit
+        # min_credit_for_friction = 2.0 * (0.65 + 5.0) = 11.30
+        assert abs(friction_detail.threshold - 11.30) < 0.01
+
+    def test_yield_too_low_rejection(self, scanner, sample_option_contract):
+        """Test that low yield relative to notional is rejected.
+
+        When net_credit / notional < min_weekly_yield_bps, the trade is
+        rejected because the yield doesn't justify the capital at risk.
+        """
+        # For $100 stock: notional = 100 * 100 = $10,000
+        # min_yield = 10 bps = 0.10% = $10 net credit needed
+        # net_credit = $5 → 5 bps → REJECTED
+        cost = ExecutionCostEstimate(
+            gross_premium=6.0, commission=0.50, slippage=0.50,
+            net_credit=5.00,  # Below yield threshold for $100 stock
+            net_credit_per_share=0.05
+        )
+        candidate = CandidateStrike(
+            contract=sample_option_contract,
+            strike=105.00,
+            expiration_date=sample_option_contract.expiration_date,
+            delta=0.12,
+            p_itm=0.12,
+            sigma_distance=1.5,
+            bid=0.06,
+            ask=0.08,
+            mid_price=0.07,
+            spread_absolute=0.02,
+            spread_relative_pct=28,
+            open_interest=5000,
+            volume=500,
+            cost_estimate=cost,
+            delta_band=DeltaBand.CONSERVATIVE,
+            contracts_to_sell=1,
+            total_net_credit=5.00,
+            annualized_yield_pct=0.5,
+            days_to_expiry=7
+        )
+
+        # Pass current_price=$100 to enable yield calculation
+        reasons, details = scanner.apply_tradability_filters(candidate, current_price=100.0)
+        assert RejectionReason.YIELD_TOO_LOW in reasons
+        yield_detail = next(d for d in details if d.reason == RejectionReason.YIELD_TOO_LOW)
+        # actual_yield_bps = (5.00 / 10000) * 10000 = 5 bps
+        assert abs(yield_detail.actual_value - 5.0) < 0.1
+        assert yield_detail.threshold == 10.0  # default min_weekly_yield_bps
 
     def test_passing_all_filters(self, scanner, sample_option_contract):
         """Test candidate that passes all filters."""

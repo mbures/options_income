@@ -103,7 +103,9 @@ class RejectionReason(Enum):
     OUTSIDE_DELTA_BAND = "outside_delta_band"
     INSUFFICIENT_SHARES = "insufficient_shares"
     ITM_STRIKE = "itm_strike"
-    NET_CREDIT_TOO_LOW = "net_credit_too_low"
+    NET_CREDIT_TOO_LOW = "net_credit_too_low"  # Deprecated: use YIELD_TOO_LOW
+    YIELD_TOO_LOW = "yield_too_low"  # net_credit / notional < min_weekly_yield_bps
+    FRICTION_TOO_HIGH = "friction_too_high"  # net_credit < min_friction_multiple * costs
     EARLY_EXERCISE_RISK = "early_exercise_risk"
 
 
@@ -180,7 +182,12 @@ class ScannerConfig:
         per_contract_fee: Broker fee per contract (default $0.65)
         slippage_model: How to estimate fill price (default: half_spread_capped)
         max_slippage_per_contract: Cap on slippage estimate (default $0.10/share)
-        min_net_credit: Minimum net credit per contract to recommend
+        min_weekly_yield_bps: Minimum yield in basis points per week (default 10 bps).
+            Yield = net_credit / (spot * 100) per contract. This scales across
+            stock prices: 10 bps on $10 stock = $0.10, on $300 stock = $3.00.
+        min_friction_multiple: Net credit must be >= this multiple of friction costs
+            (default 2.0). Friction = commission + slippage. Prevents trading
+            where costs consume most of the premium.
         skip_earnings_default: Exclude earnings-week expirations (default True)
         delta_band: Target delta band for selection (default CONSERVATIVE)
         min_open_interest: Minimum OI for tradability (default 100)
@@ -199,7 +206,8 @@ class ScannerConfig:
     per_contract_fee: float = 0.65
     slippage_model: SlippageModel = SlippageModel.HALF_SPREAD_CAPPED
     max_slippage_per_contract: float = 0.10  # $0.10 per share = $10 per contract
-    min_net_credit: float = 5.00  # Minimum $5 net credit per contract
+    min_weekly_yield_bps: float = 10.0  # 10 bps = 0.10% per week (~5% annualized)
+    min_friction_multiple: float = 2.0  # net_credit >= 2x (commission + slippage)
     skip_earnings_default: bool = True
     delta_band: DeltaBand = DeltaBand.CONSERVATIVE
     min_open_interest: int = 100
@@ -217,8 +225,10 @@ class ScannerConfig:
             raise ValueError(f"overwrite_cap_pct must be between 0 and 100, got {self.overwrite_cap_pct}")
         if self.per_contract_fee < 0:
             raise ValueError(f"per_contract_fee must be non-negative, got {self.per_contract_fee}")
-        if self.min_net_credit < 0:
-            raise ValueError(f"min_net_credit must be non-negative, got {self.min_net_credit}")
+        if self.min_weekly_yield_bps < 0:
+            raise ValueError(f"min_weekly_yield_bps must be non-negative, got {self.min_weekly_yield_bps}")
+        if self.min_friction_multiple < 1:
+            raise ValueError(f"min_friction_multiple must be >= 1, got {self.min_friction_multiple}")
 
 
 @dataclass
@@ -820,13 +830,15 @@ class OverlayScanner:
 
     def apply_tradability_filters(
         self,
-        candidate: CandidateStrike
+        candidate: CandidateStrike,
+        current_price: float = 0.0
     ) -> Tuple[List[RejectionReason], List[RejectionDetail]]:
         """
         Apply tradability filters to a candidate strike.
 
         Args:
             candidate: CandidateStrike to filter
+            current_price: Current stock price (for yield calculations)
 
         Returns:
             Tuple of (rejection_reasons, rejection_details)
@@ -920,18 +932,47 @@ class OverlayScanner:
                 margin_display=f"vol={int(candidate.volume)} vs {int(self.config.min_volume)}"
             ))
 
-        # Net credit filter
-        if candidate.cost_estimate.net_credit < self.config.min_net_credit:
-            margin, display = self._calculate_margin(
-                candidate.cost_estimate.net_credit, self.config.min_net_credit, 'min'
+        # Yield-based filter: net_credit / notional >= min_weekly_yield_bps
+        # This scales across stock prices: 10 bps on $10 stock = $0.10, on $300 stock = $3.00
+        if current_price > 0:
+            # Per-contract notional = spot * 100
+            notional_per_contract = current_price * 100
+            # Per-contract net credit
+            net_credit_per_contract = candidate.cost_estimate.net_credit
+            # Yield in basis points
+            actual_yield_bps = (net_credit_per_contract / notional_per_contract) * 10000
+
+            if actual_yield_bps < self.config.min_weekly_yield_bps:
+                margin, _ = self._calculate_margin(
+                    actual_yield_bps, self.config.min_weekly_yield_bps, 'min'
+                )
+                min_credit_for_yield = (self.config.min_weekly_yield_bps / 10000) * notional_per_contract
+                reasons.append(RejectionReason.YIELD_TOO_LOW)
+                details.append(RejectionDetail(
+                    reason=RejectionReason.YIELD_TOO_LOW,
+                    actual_value=actual_yield_bps,
+                    threshold=self.config.min_weekly_yield_bps,
+                    margin=margin,
+                    margin_display=f"yield={actual_yield_bps:.1f}bps vs {self.config.min_weekly_yield_bps:.1f}bps (need ${min_credit_for_yield:.2f})"
+                ))
+
+        # Friction floor: net_credit >= min_friction_multiple * (commission + slippage)
+        # Prevents trading where costs consume most of the premium
+        friction_cost = candidate.cost_estimate.commission + candidate.cost_estimate.slippage
+        min_credit_for_friction = self.config.min_friction_multiple * friction_cost
+        net_credit = candidate.cost_estimate.net_credit
+
+        if net_credit < min_credit_for_friction:
+            margin, _ = self._calculate_margin(
+                net_credit, min_credit_for_friction, 'min'
             )
-            reasons.append(RejectionReason.NET_CREDIT_TOO_LOW)
+            reasons.append(RejectionReason.FRICTION_TOO_HIGH)
             details.append(RejectionDetail(
-                reason=RejectionReason.NET_CREDIT_TOO_LOW,
-                actual_value=candidate.cost_estimate.net_credit,
-                threshold=self.config.min_net_credit,
+                reason=RejectionReason.FRICTION_TOO_HIGH,
+                actual_value=net_credit,
+                threshold=min_credit_for_friction,
                 margin=margin,
-                margin_display=f"credit=${candidate.cost_estimate.net_credit:.2f} vs ${self.config.min_net_credit:.2f}"
+                margin_display=f"net=${net_credit:.2f} vs {self.config.min_friction_multiple:.1f}x friction (${min_credit_for_friction:.2f})"
             ))
 
         return reasons, details
@@ -1296,7 +1337,9 @@ class OverlayScanner:
                 )
 
                 # Apply tradability filters (returns tuple of reasons and details)
-                rejection_reasons, rejection_details = self.apply_tradability_filters(candidate)
+                rejection_reasons, rejection_details = self.apply_tradability_filters(
+                    candidate, current_price
+                )
 
                 # Check delta band filter
                 delta_detail = self.apply_delta_band_filter(candidate)

@@ -518,7 +518,8 @@ def main():
                     per_contract_fee=0.65,
                     delta_band=DeltaBand.CONSERVATIVE,  # Conservative 10-15% P(ITM)
                     skip_earnings_default=True,
-                    min_net_credit=5.00
+                    min_weekly_yield_bps=10.0,  # 10 bps/week (~5% annualized)
+                    min_friction_multiple=2.0   # Net credit >= 2x friction costs
                 )
 
                 # Initialize scanner
