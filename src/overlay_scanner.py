@@ -33,7 +33,7 @@ Example:
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -1247,10 +1247,14 @@ class OverlayScanner:
                 logger.info(f"Skipping {exp_date} - spans earnings on {earn_date}")
                 continue
 
-            # Calculate days to expiry
+            # Calculate days to expiry (calendar days, not trading days)
+            # Convention: DTE = expiration_date - today (using dates, not datetimes)
+            # This is the standard convention for options pricing (Black-Scholes, IV)
+            # Example: Jan 19 to Jan 23 = 4 calendar days
             try:
-                exp_dt = datetime.fromisoformat(exp_date)
-                days_to_expiry = max(1, (exp_dt - datetime.now()).days)
+                exp_date_obj = date.fromisoformat(exp_date)
+                today = date.today()
+                days_to_expiry = max(1, (exp_date_obj - today).days)
             except ValueError:
                 days_to_expiry = 7  # Default fallback
 

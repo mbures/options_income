@@ -36,7 +36,7 @@ Example:
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Optional, List, Dict, Any
 
@@ -508,10 +508,18 @@ class CoveredCallAnalyzer:
         return results[:limit]
 
     def _calculate_days_to_expiry(self, expiration_date: str) -> int:
-        """Calculate days until expiration."""
+        """
+        Calculate calendar days until expiration.
+
+        Uses calendar days (not trading days) as this is the standard
+        convention for options pricing (Black-Scholes, IV term structure).
+
+        Example: Jan 19 to Jan 23 = 4 calendar days
+        """
         try:
-            exp_dt = datetime.fromisoformat(expiration_date)
-            days = (exp_dt - datetime.now()).days
+            exp_date_obj = date.fromisoformat(expiration_date)
+            today = date.today()
+            days = (exp_date_obj - today).days
             return max(1, days)
         except (ValueError, TypeError):
             return 30  # Default fallback
@@ -804,10 +812,18 @@ class CoveredPutAnalyzer:
         return results[:limit]
 
     def _calculate_days_to_expiry(self, expiration_date: str) -> int:
-        """Calculate days until expiration."""
+        """
+        Calculate calendar days until expiration.
+
+        Uses calendar days (not trading days) as this is the standard
+        convention for options pricing (Black-Scholes, IV term structure).
+
+        Example: Jan 19 to Jan 23 = 4 calendar days
+        """
         try:
-            exp_dt = datetime.fromisoformat(expiration_date)
-            days = (exp_dt - datetime.now()).days
+            exp_date_obj = date.fromisoformat(expiration_date)
+            today = date.today()
+            days = (exp_date_obj - today).days
             return max(1, days)
         except (ValueError, TypeError):
             return 30  # Default fallback

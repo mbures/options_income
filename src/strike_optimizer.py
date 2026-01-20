@@ -679,11 +679,13 @@ class StrikeOptimizer:
             logger.warning(f"No {option_type} contracts found for recommendations")
             return []
 
-        # Calculate days to expiry
-        from datetime import datetime
+        # Calculate days to expiry (calendar days, not trading days)
+        # This is the standard convention for options pricing (Black-Scholes, IV)
+        from datetime import date
         try:
-            exp_dt = datetime.fromisoformat(expiration_date)
-            days_to_expiry = max(1, (exp_dt - datetime.now()).days)
+            exp_date_obj = date.fromisoformat(expiration_date)
+            today = date.today()
+            days_to_expiry = max(1, (exp_date_obj - today).days)
         except (ValueError, TypeError):
             days_to_expiry = 30  # Default fallback
 
