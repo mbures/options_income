@@ -579,14 +579,46 @@ def main():
                             print("\n  No recommendations - all strikes filtered out")
                             if result.rejected_strikes:
                                 print(f"  Rejected {len(result.rejected_strikes)} strikes")
-                                # Show rejection reasons
+
+                                # Show rejection reasons summary
                                 rejection_counts = {}
                                 for strike in result.rejected_strikes:
                                     for reason in strike.rejection_reasons:
                                         rejection_counts[reason.value] = rejection_counts.get(reason.value, 0) + 1
-                                print("  Rejection reasons:")
-                                for reason, count in sorted(rejection_counts.items(), key=lambda x: -x[1])[:3]:
+                                print("  Rejection reasons summary:")
+                                for reason, count in sorted(rejection_counts.items(), key=lambda x: -x[1])[:5]:
                                     print(f"    • {reason}: {count}")
+
+                                # Near-miss analysis
+                                if result.near_miss_candidates:
+                                    print("\n  ═══════════════════════════════════════════════════════════════")
+                                    print("  NEAR-MISS ANALYSIS (Top 5 closest to passing)")
+                                    print("  ═══════════════════════════════════════════════════════════════")
+                                    print(f"  {'#':>2} {'Strike':>8} {'Exp':>12} {'Delta':>6} {'Bid':>6} {'Ask':>6} "
+                                          f"{'OI':>6} {'Sprd%':>6} {'Net$':>7} {'Score':>5}")
+                                    print("  " + "-" * 78)
+
+                                    for i, nm in enumerate(result.near_miss_candidates, 1):
+                                        print(
+                                            f"  {i:>2} "
+                                            f"${nm.strike:>7.2f} "
+                                            f"{nm.expiration_date:>12} "
+                                            f"{nm.delta:>5.3f} "
+                                            f"${nm.bid:>5.2f} "
+                                            f"${nm.ask:>5.2f} "
+                                            f"{nm.open_interest:>5} "
+                                            f"{nm.spread_relative_pct:>5.1f}% "
+                                            f"${nm.total_net_credit:>6.2f} "
+                                            f"{nm.near_miss_score:>4.2f}"
+                                        )
+
+                                        # Show rejection details
+                                        print(f"      Rejections ({len(nm.rejection_details)}):")
+                                        for detail in nm.rejection_details:
+                                            binding_marker = " ◄ BINDING" if nm.binding_constraint and detail.reason == nm.binding_constraint.reason else ""
+                                            print(f"        • {detail.reason.value}: {detail.margin_display}{binding_marker}")
+
+                                        print()  # Blank line between candidates
                     elif result and result.error:
                         print(f"\n  ⚠ Error: {result.error}")
 

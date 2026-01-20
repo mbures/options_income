@@ -25,6 +25,7 @@ from src.overlay_scanner import (
     DeltaBand,
     SlippageModel,
     RejectionReason,
+    RejectionDetail,
     ExecutionCostEstimate,
     CandidateStrike,
     BrokerChecklist,
@@ -486,8 +487,10 @@ class TestTradabilityFilters:
             days_to_expiry=7
         )
 
-        reasons = scanner.apply_tradability_filters(candidate)
+        reasons, details = scanner.apply_tradability_filters(candidate)
         assert RejectionReason.ZERO_BID in reasons
+        assert len(details) > 0
+        assert any(d.reason == RejectionReason.ZERO_BID for d in details)
 
     def test_low_premium_rejection(self, scanner, sample_option_contract):
         """Test that low premium is rejected."""
@@ -517,8 +520,9 @@ class TestTradabilityFilters:
             days_to_expiry=7
         )
 
-        reasons = scanner.apply_tradability_filters(candidate)
+        reasons, details = scanner.apply_tradability_filters(candidate)
         assert RejectionReason.LOW_PREMIUM in reasons
+        assert any(d.reason == RejectionReason.LOW_PREMIUM for d in details)
 
     def test_wide_spread_absolute_rejection(self, scanner, sample_option_contract):
         """Test that wide absolute spread is rejected."""
@@ -548,8 +552,9 @@ class TestTradabilityFilters:
             days_to_expiry=7
         )
 
-        reasons = scanner.apply_tradability_filters(candidate)
+        reasons, details = scanner.apply_tradability_filters(candidate)
         assert RejectionReason.WIDE_SPREAD_ABSOLUTE in reasons
+        assert any(d.reason == RejectionReason.WIDE_SPREAD_ABSOLUTE for d in details)
 
     def test_low_open_interest_rejection(self, scanner, sample_option_contract):
         """Test that low open interest is rejected."""
@@ -579,8 +584,13 @@ class TestTradabilityFilters:
             days_to_expiry=7
         )
 
-        reasons = scanner.apply_tradability_filters(candidate)
+        reasons, details = scanner.apply_tradability_filters(candidate)
         assert RejectionReason.LOW_OPEN_INTEREST in reasons
+        # Verify margin calculation: 50/100 = 0.5 shortfall
+        oi_detail = next(d for d in details if d.reason == RejectionReason.LOW_OPEN_INTEREST)
+        assert oi_detail.actual_value == 50
+        assert oi_detail.threshold == 100
+        assert oi_detail.margin == 0.5  # (100-50)/100
 
     def test_low_volume_rejection(self, scanner, sample_option_contract):
         """Test that low volume is rejected."""
@@ -610,8 +620,11 @@ class TestTradabilityFilters:
             days_to_expiry=7
         )
 
-        reasons = scanner.apply_tradability_filters(candidate)
+        reasons, details = scanner.apply_tradability_filters(candidate)
         assert RejectionReason.LOW_VOLUME in reasons
+        vol_detail = next(d for d in details if d.reason == RejectionReason.LOW_VOLUME)
+        assert vol_detail.actual_value == 5
+        assert vol_detail.threshold == 10
 
     def test_low_net_credit_rejection(self, scanner, sample_option_contract):
         """Test that low net credit is rejected."""
@@ -642,8 +655,11 @@ class TestTradabilityFilters:
             days_to_expiry=7
         )
 
-        reasons = scanner.apply_tradability_filters(candidate)
+        reasons, details = scanner.apply_tradability_filters(candidate)
         assert RejectionReason.NET_CREDIT_TOO_LOW in reasons
+        credit_detail = next(d for d in details if d.reason == RejectionReason.NET_CREDIT_TOO_LOW)
+        assert credit_detail.actual_value == 4.35
+        assert credit_detail.threshold == 5.0
 
     def test_passing_all_filters(self, scanner, sample_option_contract):
         """Test candidate that passes all filters."""
@@ -673,8 +689,9 @@ class TestTradabilityFilters:
             days_to_expiry=7
         )
 
-        reasons = scanner.apply_tradability_filters(candidate)
+        reasons, details = scanner.apply_tradability_filters(candidate)
         assert len(reasons) == 0
+        assert len(details) == 0
 
 
 # =============================================================================
@@ -1378,3 +1395,286 @@ class TestIntegration:
 
         # With override, we should have analyzed strikes (or at least attempted)
         assert total_with >= 0
+
+
+# =============================================================================
+# Near-Miss Analysis Tests
+# =============================================================================
+
+
+class TestNearMissAnalysis:
+    """Tests for near-miss candidate analysis."""
+
+    def test_rejection_detail_to_dict(self):
+        """Test RejectionDetail serialization."""
+        detail = RejectionDetail(
+            reason=RejectionReason.LOW_OPEN_INTEREST,
+            actual_value=50,
+            threshold=100,
+            margin=0.5,
+            margin_display="OI=50 vs 100"
+        )
+        d = detail.to_dict()
+
+        assert d["reason"] == "low_open_interest"
+        assert d["actual_value"] == 50
+        assert d["threshold"] == 100
+        assert d["margin"] == 0.5
+        assert d["margin_display"] == "OI=50 vs 100"
+
+    def test_calculate_near_miss_score_single_rejection(self, scanner, sample_option_contract):
+        """Test near-miss score with single rejection."""
+        cost = ExecutionCostEstimate(
+            gross_premium=50.0, commission=0.65, slippage=2.0,
+            net_credit=47.35, net_credit_per_share=0.4735
+        )
+        candidate = CandidateStrike(
+            contract=sample_option_contract,
+            strike=190.00,
+            expiration_date=sample_option_contract.expiration_date,
+            delta=0.12,
+            p_itm=0.12,
+            sigma_distance=1.5,
+            bid=0.50,
+            ask=0.55,
+            mid_price=0.525,
+            spread_absolute=0.05,
+            spread_relative_pct=10,
+            open_interest=50,  # Low OI - single rejection
+            volume=100,
+            cost_estimate=cost,
+            delta_band=DeltaBand.CONSERVATIVE,
+            contracts_to_sell=1,
+            total_net_credit=47.35,
+            annualized_yield_pct=3.0,
+            days_to_expiry=7
+        )
+
+        # Add single rejection detail
+        candidate.rejection_details = [
+            RejectionDetail(
+                reason=RejectionReason.LOW_OPEN_INTEREST,
+                actual_value=50,
+                threshold=100,
+                margin=0.5,
+                margin_display="OI=50 vs 100"
+            )
+        ]
+
+        score = scanner.calculate_near_miss_score(candidate, max_net_credit=100.0)
+
+        # Should have decent score with single rejection and moderate margin
+        assert 0.3 < score < 0.8
+        # Verify score components make sense
+        # credit_score = min(1.0, 47.35/100) * 0.6 = 0.284
+        # rejection_score = 1.0 * 0.2 = 0.2 (single rejection)
+        # margin_score = (1.0 - 0.5) * 0.2 = 0.1
+        # Total ~ 0.584
+        assert 0.5 < score < 0.7
+
+    def test_calculate_near_miss_score_multiple_rejections(self, scanner, sample_option_contract):
+        """Test near-miss score with multiple rejections."""
+        cost = ExecutionCostEstimate(
+            gross_premium=20.0, commission=0.65, slippage=1.0,
+            net_credit=18.35, net_credit_per_share=0.1835
+        )
+        candidate = CandidateStrike(
+            contract=sample_option_contract,
+            strike=190.00,
+            expiration_date=sample_option_contract.expiration_date,
+            delta=0.08,  # Outside conservative band
+            p_itm=0.08,
+            sigma_distance=2.0,
+            bid=0.20,
+            ask=0.30,
+            mid_price=0.25,
+            spread_absolute=0.10,
+            spread_relative_pct=40,  # Wide spread
+            open_interest=30,  # Low OI
+            volume=5,  # Low volume
+            cost_estimate=cost,
+            delta_band=DeltaBand.DEFENSIVE,  # Wrong band
+            contracts_to_sell=1,
+            total_net_credit=18.35,
+            annualized_yield_pct=1.0,
+            days_to_expiry=7
+        )
+
+        # Add multiple rejection details
+        candidate.rejection_details = [
+            RejectionDetail(RejectionReason.LOW_OPEN_INTEREST, 30, 100, 0.7, "OI=30 vs 100"),
+            RejectionDetail(RejectionReason.LOW_VOLUME, 5, 10, 0.5, "vol=5 vs 10"),
+            RejectionDetail(RejectionReason.WIDE_SPREAD_RELATIVE, 40, 15, 1.67, "40% vs 15%"),
+            RejectionDetail(RejectionReason.OUTSIDE_DELTA_BAND, 0.08, 0.10, 0.2, "delta=0.08"),
+        ]
+
+        score = scanner.calculate_near_miss_score(candidate, max_net_credit=100.0)
+
+        # Score should be lower with many rejections
+        assert score < 0.5
+
+    def test_populate_near_miss_details_sets_binding(self, scanner, sample_option_contract):
+        """Test that populate_near_miss_details identifies binding constraint."""
+        cost = ExecutionCostEstimate(
+            gross_premium=50.0, commission=0.65, slippage=2.0,
+            net_credit=47.35, net_credit_per_share=0.4735
+        )
+        candidate = CandidateStrike(
+            contract=sample_option_contract,
+            strike=190.00,
+            expiration_date=sample_option_contract.expiration_date,
+            delta=0.12,
+            p_itm=0.12,
+            sigma_distance=1.5,
+            bid=0.50,
+            ask=0.55,
+            mid_price=0.525,
+            spread_absolute=0.05,
+            spread_relative_pct=10,
+            open_interest=95,  # Close to threshold
+            volume=8,  # Close to threshold
+            cost_estimate=cost,
+            delta_band=DeltaBand.CONSERVATIVE,
+            contracts_to_sell=1,
+            total_net_credit=47.35,
+            annualized_yield_pct=3.0,
+            days_to_expiry=7
+        )
+
+        # Add rejection details with different margins
+        candidate.rejection_details = [
+            RejectionDetail(RejectionReason.LOW_OPEN_INTEREST, 95, 100, 0.05, "OI=95 vs 100"),  # Smallest margin
+            RejectionDetail(RejectionReason.LOW_VOLUME, 8, 10, 0.2, "vol=8 vs 10"),
+        ]
+
+        scanner.populate_near_miss_details(candidate)
+
+        # Binding should be the one with smallest margin
+        assert candidate.binding_constraint is not None
+        assert candidate.binding_constraint.reason == RejectionReason.LOW_OPEN_INTEREST
+        assert candidate.binding_constraint.margin == 0.05
+        assert candidate.near_miss_score > 0
+
+    def test_scan_result_includes_near_miss_candidates(self, scanner, sample_holding, sample_options_chain):
+        """Test that scan result includes near-miss candidates."""
+        scanner.earnings_calendar._cache["AAPL"] = ([], datetime.now().timestamp())
+
+        result = scanner.scan_holding(
+            holding=sample_holding,
+            current_price=185.50,
+            options_chain=sample_options_chain,
+            volatility=0.30
+        )
+
+        # If there are rejected strikes, we should have near-miss candidates
+        if result.rejected_strikes:
+            assert len(result.near_miss_candidates) <= 5
+            # Near-miss candidates should be sorted by score (highest first)
+            if len(result.near_miss_candidates) > 1:
+                scores = [nm.near_miss_score for nm in result.near_miss_candidates]
+                assert scores == sorted(scores, reverse=True)
+
+    def test_near_miss_candidate_has_binding_constraint(self, scanner, sample_holding, sample_options_chain):
+        """Test that near-miss candidates have binding constraint set."""
+        scanner.earnings_calendar._cache["AAPL"] = ([], datetime.now().timestamp())
+
+        result = scanner.scan_holding(
+            holding=sample_holding,
+            current_price=185.50,
+            options_chain=sample_options_chain,
+            volatility=0.30
+        )
+
+        for nm in result.near_miss_candidates:
+            if nm.rejection_details:
+                assert nm.binding_constraint is not None
+                assert nm.binding_constraint in nm.rejection_details
+                # Verify binding has smallest margin
+                min_margin = min(d.margin for d in nm.rejection_details)
+                assert nm.binding_constraint.margin == min_margin
+
+    def test_delta_band_filter_returns_detail(self, scanner, sample_option_contract):
+        """Test that delta band filter returns proper RejectionDetail."""
+        cost = ExecutionCostEstimate(
+            gross_premium=50.0, commission=0.65, slippage=2.0,
+            net_credit=47.35, net_credit_per_share=0.4735
+        )
+        candidate = CandidateStrike(
+            contract=sample_option_contract,
+            strike=190.00,
+            expiration_date=sample_option_contract.expiration_date,
+            delta=0.08,  # Below conservative band (0.10-0.15)
+            p_itm=0.08,
+            sigma_distance=1.5,
+            bid=0.50,
+            ask=0.55,
+            mid_price=0.525,
+            spread_absolute=0.05,
+            spread_relative_pct=10,
+            open_interest=1000,
+            volume=100,
+            cost_estimate=cost,
+            delta_band=DeltaBand.DEFENSIVE,  # Wrong band
+            contracts_to_sell=1,
+            total_net_credit=47.35,
+            annualized_yield_pct=3.0,
+            days_to_expiry=7
+        )
+
+        detail = scanner.apply_delta_band_filter(candidate)
+
+        assert detail is not None
+        assert detail.reason == RejectionReason.OUTSIDE_DELTA_BAND
+        assert detail.actual_value == 0.08
+        # Threshold should be min_delta since delta is below band
+        assert detail.threshold == 0.10
+        assert detail.margin > 0
+        assert "delta=" in detail.margin_display
+
+    def test_delta_band_filter_passes_within_band(self, scanner, sample_option_contract):
+        """Test that delta band filter passes for delta within band."""
+        cost = ExecutionCostEstimate(
+            gross_premium=50.0, commission=0.65, slippage=2.0,
+            net_credit=47.35, net_credit_per_share=0.4735
+        )
+        candidate = CandidateStrike(
+            contract=sample_option_contract,
+            strike=190.00,
+            expiration_date=sample_option_contract.expiration_date,
+            delta=0.12,  # Within conservative band (0.10-0.15)
+            p_itm=0.12,
+            sigma_distance=1.5,
+            bid=0.50,
+            ask=0.55,
+            mid_price=0.525,
+            spread_absolute=0.05,
+            spread_relative_pct=10,
+            open_interest=1000,
+            volume=100,
+            cost_estimate=cost,
+            delta_band=DeltaBand.CONSERVATIVE,
+            contracts_to_sell=1,
+            total_net_credit=47.35,
+            annualized_yield_pct=3.0,
+            days_to_expiry=7
+        )
+
+        detail = scanner.apply_delta_band_filter(candidate)
+
+        assert detail is None  # Should pass filter
+
+    def test_scan_result_to_dict_includes_near_miss(self, scanner, sample_holding, sample_options_chain):
+        """Test that ScanResult.to_dict includes near_miss_candidates."""
+        scanner.earnings_calendar._cache["AAPL"] = ([], datetime.now().timestamp())
+
+        result = scanner.scan_holding(
+            holding=sample_holding,
+            current_price=185.50,
+            options_chain=sample_options_chain,
+            volatility=0.30
+        )
+
+        d = result.to_dict()
+
+        assert "near_miss_candidates" in d
+        assert isinstance(d["near_miss_candidates"], list)

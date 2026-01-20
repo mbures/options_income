@@ -108,6 +108,38 @@ class RejectionReason(Enum):
 
 
 @dataclass
+class RejectionDetail:
+    """
+    Detailed rejection information with margin tracking.
+
+    Tracks not just why a candidate was rejected, but how close it was
+    to passing each constraint. This enables near-miss analysis.
+
+    Attributes:
+        reason: The rejection reason enum
+        actual_value: The candidate's actual value for this constraint
+        threshold: The threshold that needed to be met
+        margin: How far from passing (normalized 0-1, 0 = at threshold)
+        margin_display: Human-readable margin description
+    """
+    reason: RejectionReason
+    actual_value: float
+    threshold: float
+    margin: float  # 0 = at threshold, 1 = far from threshold
+    margin_display: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "reason": self.reason.value,
+            "actual_value": round(self.actual_value, 4),
+            "threshold": round(self.threshold, 4),
+            "margin": round(self.margin, 4),
+            "margin_display": self.margin_display,
+        }
+
+
+@dataclass
 class PortfolioHolding:
     """
     Represents a single portfolio holding.
@@ -262,6 +294,9 @@ class CandidateStrike:
     days_to_expiry: int
     warnings: List[str] = field(default_factory=list)
     rejection_reasons: List[RejectionReason] = field(default_factory=list)
+    rejection_details: List["RejectionDetail"] = field(default_factory=list)
+    binding_constraint: Optional["RejectionDetail"] = None
+    near_miss_score: float = 0.0
     is_recommended: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
@@ -287,6 +322,9 @@ class CandidateStrike:
             "days_to_expiry": self.days_to_expiry,
             "warnings": self.warnings,
             "rejection_reasons": [r.value for r in self.rejection_reasons],
+            "rejection_details": [d.to_dict() for d in self.rejection_details],
+            "binding_constraint": self.binding_constraint.to_dict() if self.binding_constraint else None,
+            "near_miss_score": round(self.near_miss_score, 4),
             "is_recommended": self.is_recommended,
         }
 
@@ -399,6 +437,7 @@ class ScanResult:
         contracts_available: Max contracts based on overwrite cap
         recommended_strikes: List of recommended strikes (passed all filters)
         rejected_strikes: List of rejected strikes with reasons
+        near_miss_candidates: Top 5 rejected candidates by near-miss score
         earnings_dates: Earnings dates found
         has_earnings_conflict: Whether any expiration spans earnings
         broker_checklist: Checklist for the top recommendation
@@ -412,6 +451,7 @@ class ScanResult:
     contracts_available: int
     recommended_strikes: List[CandidateStrike] = field(default_factory=list)
     rejected_strikes: List[CandidateStrike] = field(default_factory=list)
+    near_miss_candidates: List[CandidateStrike] = field(default_factory=list)
     earnings_dates: List[str] = field(default_factory=list)
     has_earnings_conflict: bool = False
     broker_checklist: Optional[BrokerChecklist] = None
@@ -428,6 +468,7 @@ class ScanResult:
             "contracts_available": self.contracts_available,
             "recommended_strikes": [s.to_dict() for s in self.recommended_strikes],
             "rejected_strikes": [s.to_dict() for s in self.rejected_strikes],
+            "near_miss_candidates": [s.to_dict() for s in self.near_miss_candidates],
             "earnings_dates": self.earnings_dates,
             "has_earnings_conflict": self.has_earnings_conflict,
             "broker_checklist": self.broker_checklist.to_dict() if self.broker_checklist else None,
@@ -732,10 +773,49 @@ class OverlayScanner:
                 return band
         return None
 
+    def _calculate_margin(
+        self,
+        actual: float,
+        threshold: float,
+        constraint_type: str
+    ) -> Tuple[float, str]:
+        """
+        Calculate normalized margin from threshold.
+
+        Args:
+            actual: Actual value
+            threshold: Threshold value
+            constraint_type: 'min' (actual must be >= threshold) or 'max' (actual must be <= threshold)
+
+        Returns:
+            Tuple of (margin, display_string)
+            margin: 0 = at threshold, higher = further from passing
+        """
+        if constraint_type == 'min':
+            # For minimum constraints: need actual >= threshold
+            if threshold == 0:
+                margin = 1.0 if actual <= 0 else 0.0
+            else:
+                gap = threshold - actual
+                margin = max(0, gap / threshold)
+            shortfall = threshold - actual
+            display = f"{actual:.2f} vs {threshold:.2f} (need +{shortfall:.2f})"
+        else:  # max
+            # For maximum constraints: need actual <= threshold
+            if threshold == 0:
+                margin = 1.0 if actual > 0 else 0.0
+            else:
+                excess = actual - threshold
+                margin = max(0, excess / threshold)
+            excess = actual - threshold
+            display = f"{actual:.2f} vs {threshold:.2f} (excess {excess:.2f})"
+
+        return margin, display
+
     def apply_tradability_filters(
         self,
         candidate: CandidateStrike
-    ) -> List[RejectionReason]:
+    ) -> Tuple[List[RejectionReason], List[RejectionDetail]]:
         """
         Apply tradability filters to a candidate strike.
 
@@ -743,37 +823,216 @@ class OverlayScanner:
             candidate: CandidateStrike to filter
 
         Returns:
-            List of rejection reasons (empty if passes all filters)
+            Tuple of (rejection_reasons, rejection_details)
+            - rejection_reasons: List of RejectionReason enums
+            - rejection_details: List of RejectionDetail with margin info
         """
         reasons = []
+        details = []
 
         # Zero bid filter
         if candidate.bid <= 0:
             reasons.append(RejectionReason.ZERO_BID)
+            details.append(RejectionDetail(
+                reason=RejectionReason.ZERO_BID,
+                actual_value=candidate.bid,
+                threshold=0.01,
+                margin=1.0,
+                margin_display=f"bid=${candidate.bid:.2f} (no market)"
+            ))
 
         # Low premium filter
         elif candidate.bid < self.config.min_bid_price:
+            margin, display = self._calculate_margin(
+                candidate.bid, self.config.min_bid_price, 'min'
+            )
             reasons.append(RejectionReason.LOW_PREMIUM)
+            details.append(RejectionDetail(
+                reason=RejectionReason.LOW_PREMIUM,
+                actual_value=candidate.bid,
+                threshold=self.config.min_bid_price,
+                margin=margin,
+                margin_display=f"bid={display}"
+            ))
 
-        # Spread filters
+        # Spread absolute filter
         if candidate.spread_absolute > self.config.max_spread_absolute:
+            margin, display = self._calculate_margin(
+                candidate.spread_absolute, self.config.max_spread_absolute, 'max'
+            )
             reasons.append(RejectionReason.WIDE_SPREAD_ABSOLUTE)
+            details.append(RejectionDetail(
+                reason=RejectionReason.WIDE_SPREAD_ABSOLUTE,
+                actual_value=candidate.spread_absolute,
+                threshold=self.config.max_spread_absolute,
+                margin=margin,
+                margin_display=f"spread={display}"
+            ))
 
+        # Spread relative filter
         if candidate.spread_relative_pct > self.config.max_spread_relative_pct:
+            margin, display = self._calculate_margin(
+                candidate.spread_relative_pct, self.config.max_spread_relative_pct, 'max'
+            )
             reasons.append(RejectionReason.WIDE_SPREAD_RELATIVE)
+            details.append(RejectionDetail(
+                reason=RejectionReason.WIDE_SPREAD_RELATIVE,
+                actual_value=candidate.spread_relative_pct,
+                threshold=self.config.max_spread_relative_pct,
+                margin=margin,
+                margin_display=f"spread%={display}"
+            ))
 
-        # Liquidity filters
+        # Open interest filter
         if candidate.open_interest < self.config.min_open_interest:
+            margin, display = self._calculate_margin(
+                candidate.open_interest, self.config.min_open_interest, 'min'
+            )
             reasons.append(RejectionReason.LOW_OPEN_INTEREST)
+            details.append(RejectionDetail(
+                reason=RejectionReason.LOW_OPEN_INTEREST,
+                actual_value=candidate.open_interest,
+                threshold=self.config.min_open_interest,
+                margin=margin,
+                margin_display=f"OI={int(candidate.open_interest)} vs {int(self.config.min_open_interest)}"
+            ))
 
+        # Volume filter
         if candidate.volume < self.config.min_volume:
+            margin, display = self._calculate_margin(
+                candidate.volume, self.config.min_volume, 'min'
+            )
             reasons.append(RejectionReason.LOW_VOLUME)
+            details.append(RejectionDetail(
+                reason=RejectionReason.LOW_VOLUME,
+                actual_value=candidate.volume,
+                threshold=self.config.min_volume,
+                margin=margin,
+                margin_display=f"vol={int(candidate.volume)} vs {int(self.config.min_volume)}"
+            ))
 
         # Net credit filter
         if candidate.cost_estimate.net_credit < self.config.min_net_credit:
+            margin, display = self._calculate_margin(
+                candidate.cost_estimate.net_credit, self.config.min_net_credit, 'min'
+            )
             reasons.append(RejectionReason.NET_CREDIT_TOO_LOW)
+            details.append(RejectionDetail(
+                reason=RejectionReason.NET_CREDIT_TOO_LOW,
+                actual_value=candidate.cost_estimate.net_credit,
+                threshold=self.config.min_net_credit,
+                margin=margin,
+                margin_display=f"credit=${candidate.cost_estimate.net_credit:.2f} vs ${self.config.min_net_credit:.2f}"
+            ))
 
-        return reasons
+        return reasons, details
+
+    def apply_delta_band_filter(
+        self,
+        candidate: CandidateStrike
+    ) -> Optional[RejectionDetail]:
+        """
+        Check if candidate delta is within the configured delta band.
+
+        Args:
+            candidate: CandidateStrike to check
+
+        Returns:
+            RejectionDetail if outside band, None if within band
+        """
+        target_band = self.config.delta_band
+        min_delta, max_delta = DELTA_BAND_RANGES[target_band]
+        delta = abs(candidate.delta)
+
+        if min_delta <= delta < max_delta:
+            return None  # Passes filter
+
+        # Calculate margin - how far from the band edges
+        if delta < min_delta:
+            gap = min_delta - delta
+            margin = gap / min_delta if min_delta > 0 else 1.0
+            margin_display = f"delta={delta:.3f} < {min_delta:.2f} (need +{gap:.3f})"
+        else:  # delta >= max_delta
+            gap = delta - max_delta
+            margin = gap / max_delta if max_delta > 0 else 1.0
+            margin_display = f"delta={delta:.3f} > {max_delta:.2f} (excess {gap:.3f})"
+
+        return RejectionDetail(
+            reason=RejectionReason.OUTSIDE_DELTA_BAND,
+            actual_value=delta,
+            threshold=min_delta if delta < min_delta else max_delta,
+            margin=margin,
+            margin_display=margin_display
+        )
+
+    def calculate_near_miss_score(
+        self,
+        candidate: CandidateStrike,
+        max_net_credit: float = 100.0
+    ) -> float:
+        """
+        Calculate near-miss score for a rejected candidate.
+
+        Higher score = closer to being recommended.
+        Score combines:
+        - Net credit potential (normalized, weight 0.6)
+        - Inverse of rejection count (weight 0.2)
+        - Inverse of minimum margin (weight 0.2)
+
+        Args:
+            candidate: Rejected CandidateStrike with rejection_details populated
+            max_net_credit: Maximum expected net credit for normalization
+
+        Returns:
+            Near-miss score (0.0 to 1.0, higher = closer to passing)
+        """
+        if not candidate.rejection_details:
+            return 1.0  # No rejections = perfect score
+
+        # Net credit component (0-0.6): higher credit = better
+        credit_score = min(1.0, candidate.total_net_credit / max_net_credit) * 0.6
+
+        # Rejection count component (0-0.2): fewer rejections = better
+        num_rejections = len(candidate.rejection_details)
+        rejection_penalty = max(0, 1.0 - (num_rejections - 1) * 0.25)  # 1 rejection = 1.0, 5+ = 0
+        rejection_score = rejection_penalty * 0.2
+
+        # Minimum margin component (0-0.2): smaller margin = closer to passing
+        min_margin = min(d.margin for d in candidate.rejection_details)
+        margin_score = max(0, 1.0 - min_margin) * 0.2
+
+        return credit_score + rejection_score + margin_score
+
+    def populate_near_miss_details(
+        self,
+        candidate: CandidateStrike,
+        max_net_credit: float = 100.0
+    ) -> None:
+        """
+        Populate near-miss analysis fields on a rejected candidate.
+
+        Sets:
+        - rejection_details (already set by caller)
+        - binding_constraint (constraint with smallest margin)
+        - near_miss_score (weighted score)
+
+        Args:
+            candidate: CandidateStrike with rejection_details already populated
+            max_net_credit: Maximum expected net credit for normalization
+        """
+        if not candidate.rejection_details:
+            return
+
+        # Find binding constraint (smallest margin)
+        candidate.binding_constraint = min(
+            candidate.rejection_details,
+            key=lambda d: d.margin
+        )
+
+        # Calculate near-miss score
+        candidate.near_miss_score = self.calculate_near_miss_score(
+            candidate, max_net_credit
+        )
 
     def generate_broker_checklist(
         self,
@@ -1027,20 +1286,30 @@ class OverlayScanner:
                     days_to_expiry=days_to_expiry
                 )
 
-                # Apply tradability filters
-                rejection_reasons = self.apply_tradability_filters(candidate)
+                # Apply tradability filters (returns tuple of reasons and details)
+                rejection_reasons, rejection_details = self.apply_tradability_filters(candidate)
 
                 # Check delta band filter
-                if delta_band != self.config.delta_band:
+                delta_detail = self.apply_delta_band_filter(candidate)
+                if delta_detail:
                     rejection_reasons.append(RejectionReason.OUTSIDE_DELTA_BAND)
+                    rejection_details.append(delta_detail)
 
                 # Check earnings if applicable
                 if spans_earnings:
                     rejection_reasons.append(RejectionReason.EARNINGS_WEEK)
+                    rejection_details.append(RejectionDetail(
+                        reason=RejectionReason.EARNINGS_WEEK,
+                        actual_value=1.0,
+                        threshold=0.0,
+                        margin=1.0,  # Hard gate - no partial margin
+                        margin_display=f"earnings on {earn_date} before {exp_date}"
+                    ))
                     candidate.warnings.append(f"Expiration spans earnings on {earn_date}")
 
                 if rejection_reasons:
                     candidate.rejection_reasons = rejection_reasons
+                    candidate.rejection_details = rejection_details
                     candidate.is_recommended = False
                     rejected.append(candidate)
                 else:
@@ -1049,8 +1318,21 @@ class OverlayScanner:
         # Sort recommended by net credit (highest first)
         recommended.sort(key=lambda c: c.total_net_credit, reverse=True)
 
+        # Calculate near-miss scores for rejected candidates
+        max_net_credit = max(
+            (c.total_net_credit for c in rejected),
+            default=100.0
+        ) or 100.0
+
+        for candidate in rejected:
+            self.populate_near_miss_details(candidate, max_net_credit)
+
+        # Get top 5 near-miss candidates (sorted by score, highest first)
+        near_misses = sorted(rejected, key=lambda c: c.near_miss_score, reverse=True)[:5]
+
         result.recommended_strikes = recommended
         result.rejected_strikes = rejected
+        result.near_miss_candidates = near_misses
 
         # Generate broker checklist and LLM memo for top recommendation
         if recommended:
