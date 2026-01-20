@@ -14,29 +14,29 @@ Tests cover:
 - Full portfolio scanning
 """
 
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
+import pytest
+
+from src.models import OptionContract, OptionsChain
 from src.overlay_scanner import (
+    DELTA_BAND_RANGES,
+    BrokerChecklist,
+    CandidateStrike,
+    DeltaBand,
+    EarningsCalendar,
+    ExecutionCostEstimate,
+    LLMMemoPayload,
     OverlayScanner,
     PortfolioHolding,
-    ScannerConfig,
-    DeltaBand,
-    SlippageModel,
-    RejectionReason,
     RejectionDetail,
-    ExecutionCostEstimate,
-    CandidateStrike,
-    BrokerChecklist,
-    LLMMemoPayload,
+    RejectionReason,
+    ScannerConfig,
     ScanResult,
-    EarningsCalendar,
-    DELTA_BAND_RANGES,
+    SlippageModel,
 )
-from src.models import OptionContract, OptionsChain
-from src.strike_optimizer import StrikeOptimizer, ProbabilityResult
-
+from src.strike_optimizer import ProbabilityResult, StrikeOptimizer
 
 # =============================================================================
 # Fixtures
@@ -70,12 +70,7 @@ def default_config():
 @pytest.fixture
 def sample_holding():
     """Create a sample portfolio holding."""
-    return PortfolioHolding(
-        symbol="AAPL",
-        shares=500,
-        cost_basis=150.00,
-        account_type="taxable"
-    )
+    return PortfolioHolding(symbol="AAPL", shares=500, cost_basis=150.00, account_type="taxable")
 
 
 @pytest.fixture
@@ -93,7 +88,7 @@ def sample_option_contract():
         volume=500,
         open_interest=5000,
         delta=0.25,
-        implied_volatility=0.30
+        implied_volatility=0.30,
     )
 
 
@@ -111,7 +106,7 @@ def sample_options_chain(sample_option_contract):
             bid=4.50,
             ask=4.80,
             volume=800,
-            open_interest=8000
+            open_interest=8000,
         ),
         OptionContract(
             symbol="AAPL",
@@ -121,7 +116,7 @@ def sample_options_chain(sample_option_contract):
             bid=1.20,
             ask=1.35,
             volume=300,
-            open_interest=3000
+            open_interest=3000,
         ),
         OptionContract(
             symbol="AAPL",
@@ -131,7 +126,7 @@ def sample_options_chain(sample_option_contract):
             bid=0.50,
             ask=0.60,
             volume=150,
-            open_interest=1500
+            open_interest=1500,
         ),
         # Put for completeness
         OptionContract(
@@ -142,23 +137,17 @@ def sample_options_chain(sample_option_contract):
             bid=1.50,
             ask=1.65,
             volume=400,
-            open_interest=4000
+            open_interest=4000,
         ),
     ]
-    return OptionsChain(
-        symbol="AAPL",
-        contracts=contracts,
-        retrieved_at=datetime.now().isoformat()
-    )
+    return OptionsChain(symbol="AAPL", contracts=contracts, retrieved_at=datetime.now().isoformat())
 
 
 @pytest.fixture
 def scanner(mock_finnhub_client, strike_optimizer, default_config):
     """Create an overlay scanner with mocks."""
     return OverlayScanner(
-        finnhub_client=mock_finnhub_client,
-        strike_optimizer=strike_optimizer,
-        config=default_config
+        finnhub_client=mock_finnhub_client, strike_optimizer=strike_optimizer, config=default_config
     )
 
 
@@ -231,7 +220,7 @@ class TestPortfolioHolding:
             shares=300,
             cost_basis=280.50,
             acquired_date="2023-06-15",
-            account_type="taxable"
+            account_type="taxable",
         )
         assert holding.symbol == "MSFT"
         assert holding.shares == 300
@@ -260,9 +249,7 @@ class TestScannerConfig:
     def test_custom_config(self):
         """Test custom configuration."""
         config = ScannerConfig(
-            overwrite_cap_pct=50.0,
-            per_contract_fee=0.50,
-            delta_band=DeltaBand.MODERATE
+            overwrite_cap_pct=50.0, per_contract_fee=0.50, delta_band=DeltaBand.MODERATE
         )
         assert config.overwrite_cap_pct == 50.0
         assert config.per_contract_fee == 0.50
@@ -467,8 +454,11 @@ class TestTradabilityFilters:
     def test_zero_bid_rejection(self, scanner, sample_option_contract):
         """Test that zero bid is rejected."""
         cost = ExecutionCostEstimate(
-            gross_premium=0, commission=0.65, slippage=0,
-            net_credit=-0.65, net_credit_per_share=-0.0065
+            gross_premium=0,
+            commission=0.65,
+            slippage=0,
+            net_credit=-0.65,
+            net_credit_per_share=-0.0065,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -489,7 +479,7 @@ class TestTradabilityFilters:
             contracts_to_sell=1,
             total_net_credit=-0.65,
             annualized_yield_pct=0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         reasons, details = scanner.apply_tradability_filters(candidate)
@@ -500,8 +490,11 @@ class TestTradabilityFilters:
     def test_low_premium_rejection(self, scanner, sample_option_contract):
         """Test that low premium is rejected."""
         cost = ExecutionCostEstimate(
-            gross_premium=3.00, commission=0.65, slippage=0.50,
-            net_credit=1.85, net_credit_per_share=0.0185
+            gross_premium=3.00,
+            commission=0.65,
+            slippage=0.50,
+            net_credit=1.85,
+            net_credit_per_share=0.0185,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -522,7 +515,7 @@ class TestTradabilityFilters:
             contracts_to_sell=1,
             total_net_credit=1.85,
             annualized_yield_pct=1.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         reasons, details = scanner.apply_tradability_filters(candidate)
@@ -532,8 +525,11 @@ class TestTradabilityFilters:
     def test_wide_spread_absolute_rejection(self, scanner, sample_option_contract):
         """Test that wide absolute spread is rejected."""
         cost = ExecutionCostEstimate(
-            gross_premium=100.0, commission=0.65, slippage=10.0,
-            net_credit=89.35, net_credit_per_share=0.8935
+            gross_premium=100.0,
+            commission=0.65,
+            slippage=10.0,
+            net_credit=89.35,
+            net_credit_per_share=0.8935,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -554,7 +550,7 @@ class TestTradabilityFilters:
             contracts_to_sell=1,
             total_net_credit=89.35,
             annualized_yield_pct=5.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         reasons, details = scanner.apply_tradability_filters(candidate)
@@ -564,8 +560,11 @@ class TestTradabilityFilters:
     def test_low_open_interest_rejection(self, scanner, sample_option_contract):
         """Test that low open interest is rejected."""
         cost = ExecutionCostEstimate(
-            gross_premium=250.0, commission=0.65, slippage=5.0,
-            net_credit=244.35, net_credit_per_share=2.4435
+            gross_premium=250.0,
+            commission=0.65,
+            slippage=5.0,
+            net_credit=244.35,
+            net_credit_per_share=2.4435,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -586,7 +585,7 @@ class TestTradabilityFilters:
             contracts_to_sell=1,
             total_net_credit=244.35,
             annualized_yield_pct=7.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         reasons, details = scanner.apply_tradability_filters(candidate)
@@ -600,8 +599,11 @@ class TestTradabilityFilters:
     def test_low_volume_rejection(self, scanner, sample_option_contract):
         """Test that low volume is rejected."""
         cost = ExecutionCostEstimate(
-            gross_premium=250.0, commission=0.65, slippage=5.0,
-            net_credit=244.35, net_credit_per_share=2.4435
+            gross_premium=250.0,
+            commission=0.65,
+            slippage=5.0,
+            net_credit=244.35,
+            net_credit_per_share=2.4435,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -622,7 +624,7 @@ class TestTradabilityFilters:
             contracts_to_sell=1,
             total_net_credit=244.35,
             annualized_yield_pct=7.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         reasons, details = scanner.apply_tradability_filters(candidate)
@@ -641,9 +643,11 @@ class TestTradabilityFilters:
         # min_credit_for_friction = 2.0 * 5.65 = 11.30
         # net_credit = 4.35 < 11.30 → REJECTED
         cost = ExecutionCostEstimate(
-            gross_premium=10.0, commission=0.65, slippage=5.0,
+            gross_premium=10.0,
+            commission=0.65,
+            slippage=5.0,
             net_credit=4.35,
-            net_credit_per_share=0.0435
+            net_credit_per_share=0.0435,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -664,7 +668,7 @@ class TestTradabilityFilters:
             contracts_to_sell=1,
             total_net_credit=4.35,
             annualized_yield_pct=1.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         reasons, details = scanner.apply_tradability_filters(candidate)
@@ -684,9 +688,11 @@ class TestTradabilityFilters:
         # min_yield = 10 bps = 0.10% = $10 net credit needed
         # net_credit = $5 → 5 bps → REJECTED
         cost = ExecutionCostEstimate(
-            gross_premium=6.0, commission=0.50, slippage=0.50,
+            gross_premium=6.0,
+            commission=0.50,
+            slippage=0.50,
             net_credit=5.00,  # Below yield threshold for $100 stock
-            net_credit_per_share=0.05
+            net_credit_per_share=0.05,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -707,7 +713,7 @@ class TestTradabilityFilters:
             contracts_to_sell=1,
             total_net_credit=5.00,
             annualized_yield_pct=0.5,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         # Pass current_price=$100 to enable yield calculation
@@ -721,8 +727,11 @@ class TestTradabilityFilters:
     def test_passing_all_filters(self, scanner, sample_option_contract):
         """Test candidate that passes all filters."""
         cost = ExecutionCostEstimate(
-            gross_premium=250.0, commission=0.65, slippage=5.0,
-            net_credit=244.35, net_credit_per_share=2.4435
+            gross_premium=250.0,
+            commission=0.65,
+            slippage=5.0,
+            net_credit=244.35,
+            net_credit_per_share=2.4435,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -743,7 +752,7 @@ class TestTradabilityFilters:
             contracts_to_sell=1,
             total_net_credit=244.35,
             annualized_yield_pct=7.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         reasons, details = scanner.apply_tradability_filters(candidate)
@@ -759,8 +768,11 @@ class TestTradabilityFilters:
         apply when mid >= min_mid_for_relative_spread (default $0.50).
         """
         cost = ExecutionCostEstimate(
-            gross_premium=6.00, commission=0.65, slippage=1.0,
-            net_credit=4.35, net_credit_per_share=0.0435
+            gross_premium=6.00,
+            commission=0.65,
+            slippage=1.0,
+            net_credit=4.35,
+            net_credit_per_share=0.0435,
         )
         # Low-premium weekly: $0.06 bid, $0.08 ask, $0.07 mid
         # Spread = $0.02 (2 ticks), but 28.6% relative - should NOT trigger
@@ -783,7 +795,7 @@ class TestTradabilityFilters:
             contracts_to_sell=1,
             total_net_credit=4.35,
             annualized_yield_pct=2.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         reasons, details = scanner.apply_tradability_filters(candidate)
@@ -797,8 +809,11 @@ class TestTradabilityFilters:
     def test_higher_premium_relative_spread_checked(self, scanner, sample_option_contract):
         """Test that relative spread filter applies when mid >= threshold."""
         cost = ExecutionCostEstimate(
-            gross_premium=80.0, commission=0.65, slippage=5.0,
-            net_credit=74.35, net_credit_per_share=0.7435
+            gross_premium=80.0,
+            commission=0.65,
+            slippage=5.0,
+            net_credit=74.35,
+            net_credit_per_share=0.7435,
         )
         # Higher premium: $0.80 bid, $1.00 ask, $0.90 mid
         # Spread = $0.20 (absolute OK), but 22% relative - should trigger
@@ -821,7 +836,7 @@ class TestTradabilityFilters:
             contracts_to_sell=1,
             total_net_credit=74.35,
             annualized_yield_pct=4.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         reasons, details = scanner.apply_tradability_filters(candidate)
@@ -845,10 +860,7 @@ class TestEarningsCalendar:
         calendar = EarningsCalendar(mock_finnhub_client)
 
         # Manually populate cache
-        calendar._cache["AAPL"] = (
-            ["2026-01-25"],
-            datetime.now().timestamp()
-        )
+        calendar._cache["AAPL"] = (["2026-01-25"], datetime.now().timestamp())
 
         dates = calendar.get_earnings_dates("AAPL")
         assert dates == ["2026-01-25"]
@@ -861,10 +873,7 @@ class TestEarningsCalendar:
         tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         next_week = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
 
-        calendar._cache["AAPL"] = (
-            [tomorrow],
-            datetime.now().timestamp()
-        )
+        calendar._cache["AAPL"] = ([tomorrow], datetime.now().timestamp())
 
         spans, earn_date = calendar.expiration_spans_earnings("AAPL", next_week)
         assert spans is True
@@ -878,10 +887,7 @@ class TestEarningsCalendar:
         next_month = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
         next_week = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
 
-        calendar._cache["AAPL"] = (
-            [next_month],
-            datetime.now().timestamp()
-        )
+        calendar._cache["AAPL"] = ([next_month], datetime.now().timestamp())
 
         spans, earn_date = calendar.expiration_spans_earnings("AAPL", next_week)
         assert spans is False
@@ -920,8 +926,11 @@ class TestBrokerChecklist:
     def test_generate_checklist_earnings_clear(self, scanner, sample_option_contract):
         """Test checklist generation when earnings are clear."""
         cost = ExecutionCostEstimate(
-            gross_premium=250.0, commission=0.65, slippage=5.0,
-            net_credit=244.35, net_credit_per_share=2.4435
+            gross_premium=250.0,
+            commission=0.65,
+            slippage=5.0,
+            net_credit=244.35,
+            net_credit_per_share=2.4435,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -942,14 +951,11 @@ class TestBrokerChecklist:
             contracts_to_sell=2,
             total_net_credit=488.70,
             annualized_yield_pct=7.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         checklist = scanner.generate_broker_checklist(
-            symbol="AAPL",
-            candidate=candidate,
-            earnings_clear=True,
-            dividend_verified=False
+            symbol="AAPL", candidate=candidate, earnings_clear=True, dividend_verified=False
         )
 
         assert checklist.symbol == "AAPL"
@@ -965,8 +971,11 @@ class TestBrokerChecklist:
     def test_checklist_to_dict(self, scanner, sample_option_contract):
         """Test checklist serialization."""
         cost = ExecutionCostEstimate(
-            gross_premium=250.0, commission=0.65, slippage=5.0,
-            net_credit=244.35, net_credit_per_share=2.4435
+            gross_premium=250.0,
+            commission=0.65,
+            slippage=5.0,
+            net_credit=244.35,
+            net_credit_per_share=2.4435,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -987,7 +996,7 @@ class TestBrokerChecklist:
             contracts_to_sell=1,
             total_net_credit=244.35,
             annualized_yield_pct=7.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         checklist = scanner.generate_broker_checklist("AAPL", candidate, True, False)
@@ -1011,8 +1020,11 @@ class TestLLMMemoPayload:
     def test_generate_llm_memo(self, scanner, sample_holding, sample_option_contract):
         """Test LLM memo payload generation."""
         cost = ExecutionCostEstimate(
-            gross_premium=250.0, commission=0.65, slippage=5.0,
-            net_credit=244.35, net_credit_per_share=2.4435
+            gross_premium=250.0,
+            commission=0.65,
+            slippage=5.0,
+            net_credit=244.35,
+            net_credit_per_share=2.4435,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -1033,7 +1045,7 @@ class TestLLMMemoPayload:
             contracts_to_sell=1,
             total_net_credit=244.35,
             annualized_yield_pct=7.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         payload = scanner.generate_llm_memo_payload(
@@ -1042,7 +1054,7 @@ class TestLLMMemoPayload:
             holding=sample_holding,
             candidate=candidate,
             earnings_status="CLEAR",
-            dividend_status="UNVERIFIED"
+            dividend_status="UNVERIFIED",
         )
 
         assert payload.symbol == "AAPL"
@@ -1057,8 +1069,11 @@ class TestLLMMemoPayload:
     def test_memo_payload_to_dict(self, scanner, sample_holding, sample_option_contract):
         """Test memo payload serialization."""
         cost = ExecutionCostEstimate(
-            gross_premium=250.0, commission=0.65, slippage=5.0,
-            net_credit=244.35, net_credit_per_share=2.4435
+            gross_premium=250.0,
+            commission=0.65,
+            slippage=5.0,
+            net_credit=244.35,
+            net_credit_per_share=2.4435,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -1079,7 +1094,7 @@ class TestLLMMemoPayload:
             contracts_to_sell=1,
             total_net_credit=244.35,
             annualized_yield_pct=7.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         payload = scanner.generate_llm_memo_payload(
@@ -1110,7 +1125,7 @@ class TestScanHolding:
             holding=holding,
             current_price=185.50,
             options_chain=sample_options_chain,
-            volatility=0.30
+            volatility=0.30,
         )
 
         assert result.contracts_available == 0
@@ -1126,19 +1141,14 @@ class TestScanHolding:
             expiration_date=(datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d"),
             option_type="Put",
             bid=1.50,
-            ask=1.65
+            ask=1.65,
         )
         chain = OptionsChain(
-            symbol="AAPL",
-            contracts=[put],
-            retrieved_at=datetime.now().isoformat()
+            symbol="AAPL", contracts=[put], retrieved_at=datetime.now().isoformat()
         )
 
         result = scanner.scan_holding(
-            holding=sample_holding,
-            current_price=185.50,
-            options_chain=chain,
-            volatility=0.30
+            holding=sample_holding, current_price=185.50, options_chain=chain, volatility=0.30
         )
 
         assert result.error == "No call options found in chain"
@@ -1152,7 +1162,7 @@ class TestScanHolding:
             holding=sample_holding,
             current_price=185.50,
             options_chain=sample_options_chain,
-            volatility=0.30
+            volatility=0.30,
         )
 
         assert result.error is None
@@ -1166,7 +1176,7 @@ class TestScanHolding:
             holding=sample_holding,
             current_price=185.50,
             options_chain=sample_options_chain,
-            volatility=0.30
+            volatility=0.30,
         )
 
         d = result.to_dict()
@@ -1187,7 +1197,7 @@ class TestScanPortfolio:
             holdings=[sample_holding],
             current_prices={},  # Missing AAPL
             options_chains={"AAPL": sample_options_chain},
-            volatilities={"AAPL": 0.30}
+            volatilities={"AAPL": 0.30},
         )
 
         assert "AAPL" in results
@@ -1199,7 +1209,7 @@ class TestScanPortfolio:
             holdings=[sample_holding],
             current_prices={"AAPL": 185.50},
             options_chains={},  # Missing AAPL
-            volatilities={"AAPL": 0.30}
+            volatilities={"AAPL": 0.30},
         )
 
         assert "AAPL" in results
@@ -1211,7 +1221,7 @@ class TestScanPortfolio:
             holdings=[sample_holding],
             current_prices={"AAPL": 185.50},
             options_chains={"AAPL": sample_options_chain},
-            volatilities={}  # Missing AAPL
+            volatilities={},  # Missing AAPL
         )
 
         assert "AAPL" in results
@@ -1236,10 +1246,10 @@ class TestScanPortfolio:
                     bid=5.00,
                     ask=5.20,
                     volume=200,
-                    open_interest=2000
+                    open_interest=2000,
                 )
             ],
-            retrieved_at=datetime.now().isoformat()
+            retrieved_at=datetime.now().isoformat(),
         )
 
         scanner.earnings_calendar._cache["AAPL"] = ([], datetime.now().timestamp())
@@ -1249,7 +1259,7 @@ class TestScanPortfolio:
             holdings=holdings,
             current_prices={"AAPL": 185.50, "MSFT": 390.00},
             options_chains={"AAPL": sample_options_chain, "MSFT": msft_chain},
-            volatilities={"AAPL": 0.30, "MSFT": 0.25}
+            volatilities={"AAPL": 0.30, "MSFT": 0.25},
         )
 
         assert "AAPL" in results
@@ -1272,7 +1282,7 @@ class TestTradeBlotter:
                 current_price=0,
                 shares_held=500,
                 contracts_available=0,
-                error="Test error"
+                error="Test error",
             )
         }
 
@@ -1292,7 +1302,7 @@ class TestTradeBlotter:
                 shares_held=500,
                 contracts_available=1,
                 recommended_strikes=[],
-                rejected_strikes=[]
+                rejected_strikes=[],
             )
         }
 
@@ -1304,12 +1314,18 @@ class TestTradeBlotter:
     def test_blotter_sorted_by_net_credit(self, scanner, sample_option_contract):
         """Test that blotter is sorted by net credit."""
         cost_high = ExecutionCostEstimate(
-            gross_premium=500.0, commission=0.65, slippage=10.0,
-            net_credit=489.35, net_credit_per_share=4.8935
+            gross_premium=500.0,
+            commission=0.65,
+            slippage=10.0,
+            net_credit=489.35,
+            net_credit_per_share=4.8935,
         )
         cost_low = ExecutionCostEstimate(
-            gross_premium=100.0, commission=0.65, slippage=5.0,
-            net_credit=94.35, net_credit_per_share=0.9435
+            gross_premium=100.0,
+            commission=0.65,
+            slippage=5.0,
+            net_credit=94.35,
+            net_credit_per_share=0.9435,
         )
 
         high_credit = CandidateStrike(
@@ -1331,7 +1347,7 @@ class TestTradeBlotter:
             contracts_to_sell=1,
             total_net_credit=489.35,
             annualized_yield_pct=15.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         low_credit = CandidateStrike(
@@ -1353,7 +1369,7 @@ class TestTradeBlotter:
             contracts_to_sell=1,
             total_net_credit=94.35,
             annualized_yield_pct=5.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         results = {
@@ -1362,15 +1378,15 @@ class TestTradeBlotter:
                 current_price=390.00,
                 shares_held=500,
                 contracts_available=1,
-                recommended_strikes=[low_credit]
+                recommended_strikes=[low_credit],
             ),
             "AAPL": ScanResult(
                 symbol="AAPL",
                 current_price=185.50,
                 shares_held=500,
                 contracts_available=1,
-                recommended_strikes=[high_credit]
-            )
+                recommended_strikes=[high_credit],
+            ),
         }
 
         blotter = scanner.generate_trade_blotter(results)
@@ -1395,7 +1411,7 @@ class TestDeltaComputation:
             current_price=185.50,
             volatility=0.30,
             days_to_expiry=7,
-            option_type="call"
+            option_type="call",
         )
 
         # OTM call should have delta < 0.5
@@ -1409,7 +1425,7 @@ class TestDeltaComputation:
             current_price=185.00,
             volatility=0.30,
             days_to_expiry=30,
-            option_type="call"
+            option_type="call",
         )
 
         # ATM call should have delta near 0.5
@@ -1422,7 +1438,7 @@ class TestDeltaComputation:
             current_price=185.50,
             volatility=0.30,
             days_to_expiry=7,
-            option_type="call"
+            option_type="call",
         )
 
         # Deep OTM call should have very low delta
@@ -1456,7 +1472,7 @@ class TestIntegration:
             holding=sample_holding,
             current_price=185.50,
             options_chain=sample_options_chain,
-            volatility=0.30
+            volatility=0.30,
         )
 
         # Verify basic structure
@@ -1483,19 +1499,18 @@ class TestIntegration:
     def test_earnings_exclusion_hard_gate(self, scanner, sample_holding, sample_options_chain):
         """Test that earnings exclusion works as hard gate."""
         # Set up earnings date that spans the expiration
-        exp_date = sample_options_chain.contracts[0].expiration_date
         tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
         scanner.earnings_calendar._cache["AAPL"] = (
             [tomorrow],  # Earnings before expiration
-            datetime.now().timestamp()
+            datetime.now().timestamp(),
         )
 
         result = scanner.scan_holding(
             holding=sample_holding,
             current_price=185.50,
             options_chain=sample_options_chain,
-            volatility=0.30
+            volatility=0.30,
         )
 
         # Should have earnings conflict flag
@@ -1504,10 +1519,7 @@ class TestIntegration:
     def test_earnings_override(self, scanner, sample_holding, sample_options_chain):
         """Test earnings exclusion can be overridden."""
         tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-        scanner.earnings_calendar._cache["AAPL"] = (
-            [tomorrow],
-            datetime.now().timestamp()
-        )
+        scanner.earnings_calendar._cache["AAPL"] = ([tomorrow], datetime.now().timestamp())
 
         # Without override - should skip earnings week
         result_no_override = scanner.scan_holding(
@@ -1515,7 +1527,7 @@ class TestIntegration:
             current_price=185.50,
             options_chain=sample_options_chain,
             volatility=0.30,
-            override_earnings_check=False
+            override_earnings_check=False,
         )
 
         # With override - should include earnings week with warning
@@ -1524,12 +1536,14 @@ class TestIntegration:
             current_price=185.50,
             options_chain=sample_options_chain,
             volatility=0.30,
-            override_earnings_check=True
+            override_earnings_check=True,
         )
 
         # Override should produce more analyzed strikes
-        total_without = len(result_no_override.recommended_strikes) + len(result_no_override.rejected_strikes)
-        total_with = len(result_with_override.recommended_strikes) + len(result_with_override.rejected_strikes)
+        len(result_no_override.recommended_strikes) + len(result_no_override.rejected_strikes)
+        total_with = len(result_with_override.recommended_strikes) + len(
+            result_with_override.rejected_strikes
+        )
 
         # With override, we should have analyzed strikes (or at least attempted)
         assert total_with >= 0
@@ -1550,7 +1564,7 @@ class TestNearMissAnalysis:
             actual_value=50,
             threshold=100,
             margin=0.5,
-            margin_display="OI=50 vs 100"
+            margin_display="OI=50 vs 100",
         )
         d = detail.to_dict()
 
@@ -1563,8 +1577,11 @@ class TestNearMissAnalysis:
     def test_calculate_near_miss_score_single_rejection(self, scanner, sample_option_contract):
         """Test near-miss score with single rejection."""
         cost = ExecutionCostEstimate(
-            gross_premium=50.0, commission=0.65, slippage=2.0,
-            net_credit=47.35, net_credit_per_share=0.4735
+            gross_premium=50.0,
+            commission=0.65,
+            slippage=2.0,
+            net_credit=47.35,
+            net_credit_per_share=0.4735,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -1585,7 +1602,7 @@ class TestNearMissAnalysis:
             contracts_to_sell=1,
             total_net_credit=47.35,
             annualized_yield_pct=3.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         # Add single rejection detail
@@ -1595,7 +1612,7 @@ class TestNearMissAnalysis:
                 actual_value=50,
                 threshold=100,
                 margin=0.5,
-                margin_display="OI=50 vs 100"
+                margin_display="OI=50 vs 100",
             )
         ]
 
@@ -1613,8 +1630,11 @@ class TestNearMissAnalysis:
     def test_calculate_near_miss_score_multiple_rejections(self, scanner, sample_option_contract):
         """Test near-miss score with multiple rejections."""
         cost = ExecutionCostEstimate(
-            gross_premium=20.0, commission=0.65, slippage=1.0,
-            net_credit=18.35, net_credit_per_share=0.1835
+            gross_premium=20.0,
+            commission=0.65,
+            slippage=1.0,
+            net_credit=18.35,
+            net_credit_per_share=0.1835,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -1635,7 +1655,7 @@ class TestNearMissAnalysis:
             contracts_to_sell=1,
             total_net_credit=18.35,
             annualized_yield_pct=1.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         # Add multiple rejection details
@@ -1654,8 +1674,11 @@ class TestNearMissAnalysis:
     def test_populate_near_miss_details_sets_binding(self, scanner, sample_option_contract):
         """Test that populate_near_miss_details identifies binding constraint."""
         cost = ExecutionCostEstimate(
-            gross_premium=50.0, commission=0.65, slippage=2.0,
-            net_credit=47.35, net_credit_per_share=0.4735
+            gross_premium=50.0,
+            commission=0.65,
+            slippage=2.0,
+            net_credit=47.35,
+            net_credit_per_share=0.4735,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -1676,12 +1699,14 @@ class TestNearMissAnalysis:
             contracts_to_sell=1,
             total_net_credit=47.35,
             annualized_yield_pct=3.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         # Add rejection details with different margins
         candidate.rejection_details = [
-            RejectionDetail(RejectionReason.LOW_OPEN_INTEREST, 95, 100, 0.05, "OI=95 vs 100"),  # Smallest margin
+            RejectionDetail(
+                RejectionReason.LOW_OPEN_INTEREST, 95, 100, 0.05, "OI=95 vs 100"
+            ),  # Smallest margin
             RejectionDetail(RejectionReason.LOW_VOLUME, 8, 10, 0.2, "vol=8 vs 10"),
         ]
 
@@ -1693,7 +1718,9 @@ class TestNearMissAnalysis:
         assert candidate.binding_constraint.margin == 0.05
         assert candidate.near_miss_score > 0
 
-    def test_scan_result_includes_near_miss_candidates(self, scanner, sample_holding, sample_options_chain):
+    def test_scan_result_includes_near_miss_candidates(
+        self, scanner, sample_holding, sample_options_chain
+    ):
         """Test that scan result includes near-miss candidates."""
         scanner.earnings_calendar._cache["AAPL"] = ([], datetime.now().timestamp())
 
@@ -1701,7 +1728,7 @@ class TestNearMissAnalysis:
             holding=sample_holding,
             current_price=185.50,
             options_chain=sample_options_chain,
-            volatility=0.30
+            volatility=0.30,
         )
 
         # If there are rejected strikes, we should have near-miss candidates
@@ -1712,7 +1739,9 @@ class TestNearMissAnalysis:
                 scores = [nm.near_miss_score for nm in result.near_miss_candidates]
                 assert scores == sorted(scores, reverse=True)
 
-    def test_near_miss_candidate_has_binding_constraint(self, scanner, sample_holding, sample_options_chain):
+    def test_near_miss_candidate_has_binding_constraint(
+        self, scanner, sample_holding, sample_options_chain
+    ):
         """Test that near-miss candidates have binding constraint set."""
         scanner.earnings_calendar._cache["AAPL"] = ([], datetime.now().timestamp())
 
@@ -1720,7 +1749,7 @@ class TestNearMissAnalysis:
             holding=sample_holding,
             current_price=185.50,
             options_chain=sample_options_chain,
-            volatility=0.30
+            volatility=0.30,
         )
 
         for nm in result.near_miss_candidates:
@@ -1734,8 +1763,11 @@ class TestNearMissAnalysis:
     def test_delta_band_filter_returns_detail(self, scanner, sample_option_contract):
         """Test that delta band filter returns proper RejectionDetail."""
         cost = ExecutionCostEstimate(
-            gross_premium=50.0, commission=0.65, slippage=2.0,
-            net_credit=47.35, net_credit_per_share=0.4735
+            gross_premium=50.0,
+            commission=0.65,
+            slippage=2.0,
+            net_credit=47.35,
+            net_credit_per_share=0.4735,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -1756,7 +1788,7 @@ class TestNearMissAnalysis:
             contracts_to_sell=1,
             total_net_credit=47.35,
             annualized_yield_pct=3.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         detail = scanner.apply_delta_band_filter(candidate)
@@ -1772,8 +1804,11 @@ class TestNearMissAnalysis:
     def test_delta_band_filter_passes_within_band(self, scanner, sample_option_contract):
         """Test that delta band filter passes for delta within band."""
         cost = ExecutionCostEstimate(
-            gross_premium=50.0, commission=0.65, slippage=2.0,
-            net_credit=47.35, net_credit_per_share=0.4735
+            gross_premium=50.0,
+            commission=0.65,
+            slippage=2.0,
+            net_credit=47.35,
+            net_credit_per_share=0.4735,
         )
         candidate = CandidateStrike(
             contract=sample_option_contract,
@@ -1794,14 +1829,16 @@ class TestNearMissAnalysis:
             contracts_to_sell=1,
             total_net_credit=47.35,
             annualized_yield_pct=3.0,
-            days_to_expiry=7
+            days_to_expiry=7,
         )
 
         detail = scanner.apply_delta_band_filter(candidate)
 
         assert detail is None  # Should pass filter
 
-    def test_scan_result_to_dict_includes_near_miss(self, scanner, sample_holding, sample_options_chain):
+    def test_scan_result_to_dict_includes_near_miss(
+        self, scanner, sample_holding, sample_options_chain
+    ):
         """Test that ScanResult.to_dict includes near_miss_candidates."""
         scanner.earnings_calendar._cache["AAPL"] = ([], datetime.now().timestamp())
 
@@ -1809,7 +1846,7 @@ class TestNearMissAnalysis:
             holding=sample_holding,
             current_price=185.50,
             options_chain=sample_options_chain,
-            volatility=0.30
+            volatility=0.30,
         )
 
         d = result.to_dict()

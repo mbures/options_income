@@ -14,16 +14,15 @@ Note: The /stock/candle endpoint requires a paid Finnhub subscription
 for most symbols. Free tier will return 403 Forbidden error.
 """
 
-import time
 import logging
+import time
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
+from typing import Any
 
 import requests
 
 from .config import FinnhubConfig
 from .volatility import PriceData
-
 
 # Configure logging
 logging.basicConfig(
@@ -63,7 +62,7 @@ class FinnhubClient:
         )
         logger.info("Finnhub client initialized")
 
-    def get_option_chain(self, symbol: str) -> Dict[str, Any]:
+    def get_option_chain(self, symbol: str) -> dict[str, Any]:
         """
         Retrieve options chain for a given symbol.
 
@@ -106,7 +105,7 @@ class FinnhubClient:
                 )
             elif response.status_code >= 500:
                 raise FinnhubAPIError(
-                    f"Finnhub server error (HTTP {response.status_code}). " "Try again later."
+                    f"Finnhub server error (HTTP {response.status_code}). Try again later."
                 )
 
             response.raise_for_status()
@@ -127,7 +126,7 @@ class FinnhubClient:
             raise FinnhubAPIError(f"Invalid JSON response from API: {str(e)}") from e
 
     def _make_request_with_retry(
-        self, url: str, params: Dict[str, str], attempt: int = 1
+        self, url: str, params: dict[str, str], attempt: int = 1
     ) -> requests.Response:
         """
         Make HTTP request with exponential backoff retry.
@@ -173,10 +172,7 @@ class FinnhubClient:
         logger.info("Finnhub client closed")
 
     def get_candle_data(
-        self,
-        symbol: str,
-        lookback_days: int = 60,
-        resolution: str = "D"
+        self, symbol: str, lookback_days: int = 60, resolution: str = "D"
     ) -> PriceData:
         """
         Fetch historical OHLC candle data for a symbol.
@@ -218,7 +214,7 @@ class FinnhubClient:
             "resolution": resolution,
             "from": from_timestamp,
             "to": to_timestamp,
-            "token": self.config.api_key
+            "token": self.config.api_key,
         }
 
         try:
@@ -235,16 +231,13 @@ class FinnhubClient:
             data = response.json()
 
         except requests.exceptions.RequestException as e:
-            raise FinnhubAPIError(f"Failed to fetch candle data: {e}")
+            raise FinnhubAPIError(f"Failed to fetch candle data: {e}") from e
 
         # Parse response
         return self._parse_candle_response(data, symbol, lookback_days)
 
     def _parse_candle_response(
-        self,
-        response: Dict[str, Any],
-        symbol: str,
-        requested_days: int
+        self, response: dict[str, Any], symbol: str, requested_days: int
     ) -> PriceData:
         """
         Parse Finnhub candle response into PriceData.
@@ -313,8 +306,7 @@ class FinnhubClient:
                 filtered_volumes.append(int(volumes[i]))
 
         logger.info(
-            f"Parsed {len(dates)} days of price data for {symbol} "
-            f"({dates[0]} to {dates[-1]})"
+            f"Parsed {len(dates)} days of price data for {symbol} ({dates[0]} to {dates[-1]})"
         )
 
         # Validate data quality
@@ -326,16 +318,10 @@ class FinnhubClient:
             highs=filtered_highs,
             lows=filtered_lows,
             closes=filtered_closes,
-            volumes=filtered_volumes if filtered_volumes else None
+            volumes=filtered_volumes if filtered_volumes else None,
         )
 
-    def _validate_price_data(
-        self,
-        opens: list,
-        highs: list,
-        lows: list,
-        closes: list
-    ) -> None:
+    def _validate_price_data(self, opens: list, highs: list, lows: list, closes: list) -> None:
         """
         Validate price data quality.
 
@@ -358,15 +344,10 @@ class FinnhubClient:
             if highs[i] / lows[i] > 1.5:
                 logger.warning(
                     f"Large intraday range at index {i}: "
-                    f"high={highs[i]}, low={lows[i]} ({highs[i]/lows[i]:.2f}x)"
+                    f"high={highs[i]}, low={lows[i]} ({highs[i] / lows[i]:.2f}x)"
                 )
 
-    def get_earnings_calendar(
-        self,
-        symbol: str,
-        from_date: str,
-        to_date: str
-    ) -> list:
+    def get_earnings_calendar(self, symbol: str, from_date: str, to_date: str) -> list:
         """
         Fetch earnings calendar dates for a symbol.
 
@@ -384,12 +365,7 @@ class FinnhubClient:
         symbol = symbol.upper().strip()
 
         url = f"{self.config.base_url}/calendar/earnings"
-        params = {
-            "symbol": symbol,
-            "from": from_date,
-            "to": to_date,
-            "token": self.config.api_key
-        }
+        params = {"symbol": symbol, "from": from_date, "to": to_date, "token": self.config.api_key}
 
         logger.info(f"Fetching earnings calendar for {symbol} from {from_date} to {to_date}")
 
@@ -397,17 +373,13 @@ class FinnhubClient:
             response = self._make_request_with_retry(url, params)
 
             if response.status_code == 401:
-                raise FinnhubAPIError(
-                    "Authentication failed. Check your API key."
-                )
+                raise FinnhubAPIError("Authentication failed. Check your API key.")
             elif response.status_code == 429:
                 raise FinnhubAPIError(
                     "Rate limit exceeded. Finnhub free tier allows 60 calls/minute."
                 )
             elif response.status_code >= 500:
-                raise FinnhubAPIError(
-                    f"Finnhub server error (HTTP {response.status_code})."
-                )
+                raise FinnhubAPIError(f"Finnhub server error (HTTP {response.status_code}).")
 
             response.raise_for_status()
             data = response.json()
@@ -429,9 +401,7 @@ class FinnhubClient:
                 f"Request timeout after {self.config.timeout}s for earnings calendar {symbol}"
             ) from e
         except requests.exceptions.ConnectionError as e:
-            raise FinnhubAPIError(
-                f"Connection error fetching earnings for {symbol}"
-            ) from e
+            raise FinnhubAPIError(f"Connection error fetching earnings for {symbol}") from e
         except requests.exceptions.RequestException as e:
             raise FinnhubAPIError(f"Earnings API request failed: {str(e)}") from e
 

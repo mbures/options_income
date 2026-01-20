@@ -1,18 +1,19 @@
 """Tests for the strike optimizer module."""
 
 import math
-import pytest
 from unittest.mock import MagicMock
 
+import pytest
+
+from src.models import OptionContract, OptionsChain
 from src.strike_optimizer import (
+    PROFILE_SIGMA_RANGES,
+    ProbabilityResult,
     StrikeOptimizer,
     StrikeProfile,
-    StrikeResult,
-    ProbabilityResult,
     StrikeRecommendation,
-    PROFILE_SIGMA_RANGES,
+    StrikeResult,
 )
-from src.models import OptionsChain, OptionContract
 
 
 class TestStrikeOptimizer:
@@ -48,7 +49,7 @@ class TestCalculateStrikeAtSigma:
             days_to_expiry=30,
             sigma=1.0,
             option_type="call",
-            round_strike=False
+            round_strike=False,
         )
 
         # K = S × exp(n × σ × √T)
@@ -71,7 +72,7 @@ class TestCalculateStrikeAtSigma:
             days_to_expiry=30,
             sigma=1.0,
             option_type="put",
-            round_strike=False
+            round_strike=False,
         )
 
         # For puts, we use negative sigma
@@ -91,7 +92,7 @@ class TestCalculateStrikeAtSigma:
             days_to_expiry=30,
             sigma=1.5,
             option_type="call",
-            round_strike=True
+            round_strike=True,
         )
 
         # Tradeable strike should be rounded to nearest $0.50
@@ -102,11 +103,7 @@ class TestCalculateStrikeAtSigma:
     def test_calculate_strike_includes_assignment_probability(self, optimizer):
         """Test that result includes assignment probability."""
         result = optimizer.calculate_strike_at_sigma(
-            current_price=100.0,
-            volatility=0.30,
-            days_to_expiry=30,
-            sigma=1.5,
-            option_type="call"
+            current_price=100.0, volatility=0.30, days_to_expiry=30, sigma=1.5, option_type="call"
         )
 
         assert result.assignment_probability is not None
@@ -122,18 +119,14 @@ class TestCalculateStrikeAtSigma:
                 volatility=0.30,
                 days_to_expiry=30,
                 sigma=1.0,
-                option_type="call"
+                option_type="call",
             )
 
     def test_calculate_strike_invalid_volatility(self, optimizer):
         """Test error on invalid volatility."""
         with pytest.raises(ValueError, match="positive"):
             optimizer.calculate_strike_at_sigma(
-                current_price=100.0,
-                volatility=0,
-                days_to_expiry=30,
-                sigma=1.0,
-                option_type="call"
+                current_price=100.0, volatility=0, days_to_expiry=30, sigma=1.0, option_type="call"
             )
 
     def test_calculate_strike_invalid_days(self, optimizer):
@@ -144,7 +137,7 @@ class TestCalculateStrikeAtSigma:
                 volatility=0.30,
                 days_to_expiry=0,
                 sigma=1.0,
-                option_type="call"
+                option_type="call",
             )
 
     def test_calculate_strike_invalid_option_type(self, optimizer):
@@ -155,17 +148,13 @@ class TestCalculateStrikeAtSigma:
                 volatility=0.30,
                 days_to_expiry=30,
                 sigma=1.0,
-                option_type="invalid"
+                option_type="invalid",
             )
 
     def test_strike_result_to_dict(self, optimizer):
         """Test StrikeResult serialization."""
         result = optimizer.calculate_strike_at_sigma(
-            current_price=100.0,
-            volatility=0.30,
-            days_to_expiry=30,
-            sigma=1.0,
-            option_type="call"
+            current_price=100.0, volatility=0.30, days_to_expiry=30, sigma=1.0, option_type="call"
         )
 
         d = result.to_dict()
@@ -187,18 +176,14 @@ class TestRoundToTradeableStrike:
     def test_round_call_up(self, optimizer):
         """Test call strike rounds UP (conservative)."""
         result = optimizer.round_to_tradeable_strike(
-            strike=10.23,
-            current_price=10.0,
-            option_type="call"
+            strike=10.23, current_price=10.0, option_type="call"
         )
         assert result == 10.50  # Rounds up to $0.50 increment
 
     def test_round_put_down(self, optimizer):
         """Test put strike rounds DOWN (conservative)."""
         result = optimizer.round_to_tradeable_strike(
-            strike=9.77,
-            current_price=10.0,
-            option_type="put"
+            strike=9.77, current_price=10.0, option_type="put"
         )
         assert result == 9.50  # Rounds down to $0.50 increment
 
@@ -207,10 +192,7 @@ class TestRoundToTradeableStrike:
         available = [9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0]
 
         result = optimizer.round_to_tradeable_strike(
-            strike=10.23,
-            current_price=10.0,
-            option_type="call",
-            available_strikes=available
+            strike=10.23, current_price=10.0, option_type="call", available_strikes=available
         )
 
         assert result == 10.5  # Smallest available >= 10.23
@@ -220,10 +202,7 @@ class TestRoundToTradeableStrike:
         available = [8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0]
 
         result = optimizer.round_to_tradeable_strike(
-            strike=9.77,
-            current_price=10.0,
-            option_type="put",
-            available_strikes=available
+            strike=9.77, current_price=10.0, option_type="put", available_strikes=available
         )
 
         assert result == 9.5  # Largest available <= 9.77
@@ -232,17 +211,13 @@ class TestRoundToTradeableStrike:
         """Test correct increment is used based on price level."""
         # Low price: $0.50 increments
         result_low = optimizer.round_to_tradeable_strike(
-            strike=5.23,
-            current_price=5.0,
-            option_type="call"
+            strike=5.23, current_price=5.0, option_type="call"
         )
         assert result_low == 5.50
 
         # Higher price: $1.00 increments
         result_high = optimizer.round_to_tradeable_strike(
-            strike=50.23,
-            current_price=50.0,
-            option_type="call"
+            strike=50.23, current_price=50.0, option_type="call"
         )
         assert result_high == 51.0
 
@@ -269,7 +244,7 @@ class TestAssignmentProbability:
             current_price=100.0,
             volatility=0.30,
             days_to_expiry=30,
-            option_type="call"
+            option_type="call",
         )
 
         assert isinstance(result, ProbabilityResult)
@@ -281,11 +256,7 @@ class TestAssignmentProbability:
     def test_calculate_put_probability(self, optimizer):
         """Test put assignment probability calculation."""
         result = optimizer.calculate_assignment_probability(
-            strike=90.0,
-            current_price=100.0,
-            volatility=0.30,
-            days_to_expiry=30,
-            option_type="put"
+            strike=90.0, current_price=100.0, volatility=0.30, days_to_expiry=30, option_type="put"
         )
 
         assert isinstance(result, ProbabilityResult)
@@ -301,7 +272,7 @@ class TestAssignmentProbability:
             current_price=100.0,
             volatility=0.30,
             days_to_expiry=30,
-            option_type="call"
+            option_type="call",
         )
 
         # ATM should be close to 50% (drift causes slight asymmetry)
@@ -314,7 +285,7 @@ class TestAssignmentProbability:
             current_price=100.0,
             volatility=0.30,
             days_to_expiry=30,
-            option_type="call"
+            option_type="call",
         )
 
         # Deep ITM should have high probability
@@ -327,7 +298,7 @@ class TestAssignmentProbability:
             current_price=100.0,
             volatility=0.30,
             days_to_expiry=30,
-            option_type="call"
+            option_type="call",
         )
 
         # Deep OTM should have low probability
@@ -337,11 +308,7 @@ class TestAssignmentProbability:
         """Test longer time to expiry increases ITM probability for OTM options."""
         # Short term
         short = optimizer.calculate_assignment_probability(
-            strike=110.0,
-            current_price=100.0,
-            volatility=0.30,
-            days_to_expiry=7,
-            option_type="call"
+            strike=110.0, current_price=100.0, volatility=0.30, days_to_expiry=7, option_type="call"
         )
 
         # Long term
@@ -350,7 +317,7 @@ class TestAssignmentProbability:
             current_price=100.0,
             volatility=0.30,
             days_to_expiry=90,
-            option_type="call"
+            option_type="call",
         )
 
         # More time = more chance to reach strike
@@ -364,7 +331,7 @@ class TestAssignmentProbability:
             current_price=100.0,
             volatility=0.15,
             days_to_expiry=30,
-            option_type="call"
+            option_type="call",
         )
 
         # High vol
@@ -373,7 +340,7 @@ class TestAssignmentProbability:
             current_price=100.0,
             volatility=0.50,
             days_to_expiry=30,
-            option_type="call"
+            option_type="call",
         )
 
         # More vol = more chance of large move
@@ -386,7 +353,7 @@ class TestAssignmentProbability:
             current_price=100.0,
             volatility=0.30,
             days_to_expiry=30,
-            option_type="call"
+            option_type="call",
         )
 
         # ATM call delta should be around 0.5
@@ -395,11 +362,7 @@ class TestAssignmentProbability:
     def test_put_delta_negative(self, optimizer):
         """Test put delta is negative."""
         result = optimizer.calculate_assignment_probability(
-            strike=100.0,
-            current_price=100.0,
-            volatility=0.30,
-            days_to_expiry=30,
-            option_type="put"
+            strike=100.0, current_price=100.0, volatility=0.30, days_to_expiry=30, option_type="put"
         )
 
         # Put delta is negative
@@ -414,7 +377,7 @@ class TestAssignmentProbability:
             current_price=100.0,
             volatility=0.30,
             days_to_expiry=30,
-            option_type="call"
+            option_type="call",
         )
 
         d = result.to_dict()
@@ -430,14 +393,20 @@ class TestAssignmentProbability:
         """Test invalid inputs raise appropriate errors."""
         with pytest.raises(ValueError, match="positive"):
             optimizer.calculate_assignment_probability(
-                strike=-100, current_price=100, volatility=0.3,
-                days_to_expiry=30, option_type="call"
+                strike=-100,
+                current_price=100,
+                volatility=0.3,
+                days_to_expiry=30,
+                option_type="call",
             )
 
         with pytest.raises(ValueError, match="positive"):
             optimizer.calculate_assignment_probability(
-                strike=100, current_price=-100, volatility=0.3,
-                days_to_expiry=30, option_type="call"
+                strike=100,
+                current_price=-100,
+                volatility=0.3,
+                days_to_expiry=30,
+                option_type="call",
             )
 
 
@@ -481,7 +450,7 @@ class TestSigmaCalculations:
             days_to_expiry=30,
             sigma=1.5,
             option_type="call",
-            round_strike=False
+            round_strike=False,
         )
 
         # Now reverse-calculate the sigma
@@ -490,7 +459,7 @@ class TestSigmaCalculations:
             current_price=100.0,
             volatility=0.30,
             days_to_expiry=30,
-            option_type="call"
+            option_type="call",
         )
 
         assert sigma == pytest.approx(1.5, rel=1e-6)
@@ -503,7 +472,7 @@ class TestSigmaCalculations:
             days_to_expiry=30,
             sigma=1.5,
             option_type="put",
-            round_strike=False
+            round_strike=False,
         )
 
         sigma = optimizer.get_sigma_for_strike(
@@ -511,7 +480,7 @@ class TestSigmaCalculations:
             current_price=100.0,
             volatility=0.30,
             days_to_expiry=30,
-            option_type="put"
+            option_type="put",
         )
 
         assert sigma == pytest.approx(1.5, rel=1e-6)
@@ -552,10 +521,7 @@ class TestStrikeProfiles:
     def test_calculate_strikes_for_profiles(self, optimizer):
         """Test calculating strikes for all profiles."""
         results = optimizer.calculate_strikes_for_profiles(
-            current_price=100.0,
-            volatility=0.30,
-            days_to_expiry=30,
-            option_type="call"
+            current_price=100.0, volatility=0.30, days_to_expiry=30, option_type="call"
         )
 
         # Results is now ProfileStrikesResult with .strikes dict
@@ -566,9 +532,18 @@ class TestStrikeProfiles:
         assert StrikeProfile.DEFENSIVE in results
 
         # Verify strike ordering (more aggressive = closer to current price)
-        assert results[StrikeProfile.AGGRESSIVE].tradeable_strike < results[StrikeProfile.MODERATE].tradeable_strike
-        assert results[StrikeProfile.MODERATE].tradeable_strike < results[StrikeProfile.CONSERVATIVE].tradeable_strike
-        assert results[StrikeProfile.CONSERVATIVE].tradeable_strike < results[StrikeProfile.DEFENSIVE].tradeable_strike
+        assert (
+            results[StrikeProfile.AGGRESSIVE].tradeable_strike
+            < results[StrikeProfile.MODERATE].tradeable_strike
+        )
+        assert (
+            results[StrikeProfile.MODERATE].tradeable_strike
+            < results[StrikeProfile.CONSERVATIVE].tradeable_strike
+        )
+        assert (
+            results[StrikeProfile.CONSERVATIVE].tradeable_strike
+            < results[StrikeProfile.DEFENSIVE].tradeable_strike
+        )
 
         # Verify warnings and metadata fields exist
         assert isinstance(results.warnings, list)
@@ -581,7 +556,7 @@ class TestStrikeProfiles:
             current_price=100.0,
             volatility=0.30,
             days_to_expiry=7,  # Short DTE
-            option_type="call"
+            option_type="call",
         )
 
         assert results.is_short_dte is True
@@ -591,10 +566,7 @@ class TestStrikeProfiles:
         """Test that strike collisions trigger warnings."""
         # Very short DTE and low volatility should cause strike collisions
         results = optimizer.calculate_strikes_for_profiles(
-            current_price=15.00,
-            volatility=0.25,
-            days_to_expiry=4,
-            option_type="put"
+            current_price=15.00, volatility=0.25, days_to_expiry=4, option_type="put"
         )
 
         # With short DTE and low vol, multiple profiles likely collapse
@@ -606,7 +578,7 @@ class TestStrikeProfiles:
 
     def test_profile_sigma_ranges_valid(self):
         """Test that profile sigma ranges are valid."""
-        for profile, (min_sig, max_sig) in PROFILE_SIGMA_RANGES.items():
+        for _profile, (min_sig, max_sig) in PROFILE_SIGMA_RANGES.items():
             assert min_sig >= 0
             assert max_sig > min_sig
 
@@ -631,7 +603,7 @@ class TestStrikeRecommendations:
                 ask=0.55,
                 volume=500,
                 open_interest=2000,
-                implied_volatility=0.32
+                implied_volatility=0.32,
             ),
             OptionContract(
                 symbol="TEST",
@@ -642,7 +614,7 @@ class TestStrikeRecommendations:
                 ask=0.90,
                 volume=300,
                 open_interest=1500,
-                implied_volatility=0.30
+                implied_volatility=0.30,
             ),
             OptionContract(
                 symbol="TEST",
@@ -653,7 +625,7 @@ class TestStrikeRecommendations:
                 ask=1.55,
                 volume=1000,
                 open_interest=5000,
-                implied_volatility=0.28
+                implied_volatility=0.28,
             ),
             OptionContract(
                 symbol="TEST",
@@ -664,7 +636,7 @@ class TestStrikeRecommendations:
                 ask=0.80,
                 volume=800,
                 open_interest=3000,
-                implied_volatility=0.29
+                implied_volatility=0.29,
             ),
             OptionContract(
                 symbol="TEST",
@@ -675,7 +647,7 @@ class TestStrikeRecommendations:
                 ask=0.40,
                 volume=600,
                 open_interest=2500,
-                implied_volatility=0.30
+                implied_volatility=0.30,
             ),
             OptionContract(
                 symbol="TEST",
@@ -686,15 +658,11 @@ class TestStrikeRecommendations:
                 ask=0.20,
                 volume=200,
                 open_interest=50,  # Low OI
-                implied_volatility=0.31
+                implied_volatility=0.31,
             ),
         ]
 
-        return OptionsChain(
-            symbol="TEST",
-            contracts=contracts,
-            retrieved_at="2026-01-18T12:00:00"
-        )
+        return OptionsChain(symbol="TEST", contracts=contracts, retrieved_at="2026-01-18T12:00:00")
 
     def test_get_recommendations_calls(self, optimizer, mock_options_chain):
         """Test getting call recommendations."""
@@ -702,7 +670,7 @@ class TestStrikeRecommendations:
             options_chain=mock_options_chain,
             current_price=100.0,
             volatility=0.30,
-            option_type="call"
+            option_type="call",
         )
 
         assert len(recs) > 0
@@ -716,7 +684,7 @@ class TestStrikeRecommendations:
             options_chain=mock_options_chain,
             current_price=100.0,
             volatility=0.30,
-            option_type="put"
+            option_type="put",
         )
 
         assert len(recs) > 0
@@ -731,7 +699,7 @@ class TestStrikeRecommendations:
             current_price=100.0,
             volatility=0.30,
             option_type="call",
-            profile=StrikeProfile.MODERATE
+            profile=StrikeProfile.MODERATE,
         )
 
         # All recommendations should be in moderate range
@@ -746,7 +714,7 @@ class TestStrikeRecommendations:
             current_price=100.0,
             volatility=0.30,
             option_type="call",
-            min_open_interest=100
+            min_open_interest=100,
         )
 
         # Find the 107.5 strike with low OI
@@ -760,7 +728,7 @@ class TestStrikeRecommendations:
             options_chain=mock_options_chain,
             current_price=100.0,
             volatility=0.30,
-            option_type="call"
+            option_type="call",
         )
 
         assert len(recs) > 0
@@ -779,7 +747,7 @@ class TestStrikeRecommendations:
             options_chain=mock_options_chain,
             current_price=100.0,
             volatility=0.30,
-            option_type="call"
+            option_type="call",
         )
 
         assert len(recs) > 0
@@ -793,17 +761,10 @@ class TestStrikeRecommendations:
 
     def test_get_recommendations_empty_chain(self, optimizer):
         """Test with empty options chain."""
-        empty_chain = OptionsChain(
-            symbol="TEST",
-            contracts=[],
-            retrieved_at="2026-01-18T12:00:00"
-        )
+        empty_chain = OptionsChain(symbol="TEST", contracts=[], retrieved_at="2026-01-18T12:00:00")
 
         recs = optimizer.get_strike_recommendations(
-            options_chain=empty_chain,
-            current_price=100.0,
-            volatility=0.30,
-            option_type="call"
+            options_chain=empty_chain, current_price=100.0, volatility=0.30, option_type="call"
         )
 
         assert recs == []
@@ -815,7 +776,7 @@ class TestStrikeRecommendations:
             current_price=100.0,
             volatility=0.30,
             option_type="call",
-            limit=2
+            limit=2,
         )
 
         assert len(recs) <= 2
@@ -842,7 +803,7 @@ class TestMathematicalAccuracy:
                     days_to_expiry=days,
                     sigma=sigma,
                     option_type=opt_type,
-                    round_strike=False
+                    round_strike=False,
                 )
 
                 # Reverse calculate
@@ -851,7 +812,7 @@ class TestMathematicalAccuracy:
                     current_price=current_price,
                     volatility=volatility,
                     days_to_expiry=days,
-                    option_type=opt_type
+                    option_type=opt_type,
                 )
 
                 assert calc_sigma == pytest.approx(sigma, rel=1e-6)
@@ -864,7 +825,7 @@ class TestMathematicalAccuracy:
             days_to_expiry=30,
             sigma=1.0,
             option_type="call",
-            round_strike=False
+            round_strike=False,
         )
 
         result_put = optimizer.calculate_strike_at_sigma(
@@ -873,7 +834,7 @@ class TestMathematicalAccuracy:
             days_to_expiry=30,
             sigma=1.0,
             option_type="put",
-            round_strike=False
+            round_strike=False,
         )
 
         # Call strike * Put strike should equal S^2 for lognormal symmetry
@@ -890,15 +851,11 @@ class TestMathematicalAccuracy:
             current_price=100.0,
             volatility=0.30,
             days_to_expiry=30,
-            option_type="call"
+            option_type="call",
         )
 
         put_result = optimizer.calculate_assignment_probability(
-            strike=100.0,
-            current_price=100.0,
-            volatility=0.30,
-            days_to_expiry=30,
-            option_type="put"
+            strike=100.0, current_price=100.0, volatility=0.30, days_to_expiry=30, option_type="put"
         )
 
         # delta_call - delta_put = 1

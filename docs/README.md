@@ -22,7 +22,7 @@ A Python-based application for retrieving options chain data from the Finnhub AP
 - ✅ **Multiple Output Formats**: JSON, summary, and minimal output formats
 - ✅ **Comprehensive Error Handling**: Clear error messages with actionable guidance
 - ✅ **Extensive Test Coverage**: 76 unit tests with >98% coverage for core modules
-- ✅ **Code Quality**: Linted with pylint (9.31/10), formatted with black, type-checked with mypy
+- ✅ **Code Quality**: Linted and formatted with ruff, type-checked with mypy
 - ✅ **Well-Documented**: Inline docstrings, type hints, and comprehensive README
 
 ## 📦 Requirements
@@ -234,8 +234,7 @@ finnhub-options/
 ├── requirements.txt
 ├── requirements-dev.txt
 ├── pytest.ini
-├── pyproject.toml
-├── .pylintrc
+├── pyproject.toml          # Contains ruff configuration
 └── README.md
 ```
 
@@ -319,24 +318,22 @@ TOTAL                      233      3    99%
 
 ## 🛠️ Development
 
-### Code Formatting
+### Code Formatting and Linting
+
+This project uses **ruff** for both linting and formatting (configured in `pyproject.toml`).
 
 ```bash
+# Check for linting issues
+ruff check .
+
+# Auto-fix linting issues
+ruff check . --fix
+
 # Check formatting
-black src/ tests/ --check
+ruff format --check .
 
 # Apply formatting
-black src/ tests/
-```
-
-### Linting
-
-```bash
-# Run pylint
-pylint src/
-
-# Run with configuration
-pylint src/ --rcfile=.pylintrc
+ruff format .
 ```
 
 ### Type Checking
@@ -348,11 +345,11 @@ mypy src/
 ### Run All Quality Checks
 
 ```bash
-# Format code
-black src/ tests/
+# Lint and auto-fix
+ruff check . --fix
 
-# Run linter
-pylint src/
+# Format code
+ruff format .
 
 # Type check
 mypy src/
@@ -366,10 +363,9 @@ pytest --cov=src
 1. Write tests first (TDD approach)
 2. Implement feature
 3. Run tests: `pytest`
-4. Format code: `black src/ tests/`
-5. Lint code: `pylint src/`
-6. Type check: `mypy src/`
-7. Update documentation
+4. Lint and format code: `ruff check . --fix && ruff format .`
+5. Type check: `mypy src/`
+6. Update documentation
 
 ## ⚠️ Known Limitations
 

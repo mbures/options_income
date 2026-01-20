@@ -1,7 +1,7 @@
 """Data models for options chain representation."""
 
-from dataclasses import dataclass, asdict
-from typing import List, Optional, Dict, Any
+from dataclasses import asdict, dataclass
+from typing import Any, Optional
 
 
 @dataclass
@@ -43,7 +43,7 @@ class OptionContract:
     rho: Optional[float] = None
     implied_volatility: Optional[float] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Convert to dictionary for JSON serialization.
 
@@ -106,10 +106,10 @@ class OptionsChain:
     """
 
     symbol: str
-    contracts: List[OptionContract]
+    contracts: list[OptionContract]
     retrieved_at: str
 
-    def get_calls(self) -> List[OptionContract]:
+    def get_calls(self) -> list[OptionContract]:
         """
         Get all call options.
 
@@ -118,7 +118,7 @@ class OptionsChain:
         """
         return [c for c in self.contracts if c.is_call]
 
-    def get_puts(self) -> List[OptionContract]:
+    def get_puts(self) -> list[OptionContract]:
         """
         Get all put options.
 
@@ -127,7 +127,7 @@ class OptionsChain:
         """
         return [c for c in self.contracts if c.is_put]
 
-    def get_by_expiration(self, date: str) -> List[OptionContract]:
+    def get_by_expiration(self, date: str) -> list[OptionContract]:
         """
         Get all contracts for a specific expiration date.
 
@@ -139,16 +139,16 @@ class OptionsChain:
         """
         return [c for c in self.contracts if c.expiration_date == date]
 
-    def get_expirations(self) -> List[str]:
+    def get_expirations(self) -> list[str]:
         """
         Get unique expiration dates sorted chronologically.
 
         Returns:
             Sorted list of unique expiration dates
         """
-        return sorted(list(set(c.expiration_date for c in self.contracts)))
+        return sorted({c.expiration_date for c in self.contracts})
 
-    def get_strikes(self, expiration: Optional[str] = None) -> List[float]:
+    def get_strikes(self, expiration: Optional[str] = None) -> list[float]:
         """
         Get unique strike prices, optionally filtered by expiration.
 
@@ -163,9 +163,9 @@ class OptionsChain:
         else:
             contracts = self.contracts
 
-        return sorted(list(set(c.strike for c in contracts)))
+        return sorted({c.strike for c in contracts})
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Convert to dictionary for JSON serialization.
 

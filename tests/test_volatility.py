@@ -1,13 +1,15 @@
 """Unit tests for volatility calculation module."""
 
-import pytest
 import math
+
+import pytest
+
 from src.volatility import (
+    BlendWeights,
+    PriceData,
     VolatilityCalculator,
     VolatilityConfig,
-    BlendWeights,
     VolatilityResult,
-    PriceData
 )
 
 
@@ -25,10 +27,7 @@ class TestVolatilityConfig:
     def test_config_custom_values(self):
         """Test custom configuration values."""
         config = VolatilityConfig(
-            short_window=10,
-            long_window=30,
-            annualization_factor=250.0,
-            min_data_points=5
+            short_window=10, long_window=30, annualization_factor=250.0, min_data_points=5
         )
         assert config.short_window == 10
         assert config.long_window == 30
@@ -65,7 +64,9 @@ class TestBlendWeights:
         """Test that weights must sum to 1.0."""
         # Valid weights
         weights = BlendWeights(realized_short=0.4, realized_long=0.3, implied=0.3)
-        assert abs(sum([weights.realized_short, weights.realized_long, weights.implied]) - 1.0) < 0.001
+        assert (
+            abs(sum([weights.realized_short, weights.realized_long, weights.implied]) - 1.0) < 0.001
+        )
 
     def test_weights_validation_sum(self):
         """Test that weights must sum to 1.0."""
@@ -99,13 +100,7 @@ class TestPriceData:
         lows = [99.0, 100.0]
         closes = [101.0, 102.0]
 
-        data = PriceData(
-            dates=dates,
-            opens=opens,
-            highs=highs,
-            lows=lows,
-            closes=closes
-        )
+        data = PriceData(dates=dates, opens=opens, highs=highs, lows=lows, closes=closes)
         assert len(data.opens) == 2
         assert len(data.highs) == 2
 
@@ -114,7 +109,7 @@ class TestPriceData:
         with pytest.raises(ValueError, match="closes must match dates length"):
             PriceData(
                 dates=["2026-01-01", "2026-01-02"],
-                closes=[100.0]  # Wrong length
+                closes=[100.0],  # Wrong length
             )
 
     def test_price_data_invalid_prices(self):
@@ -122,7 +117,7 @@ class TestPriceData:
         with pytest.raises(ValueError, match="All prices must be positive"):
             PriceData(
                 dates=["2026-01-01", "2026-01-02"],
-                closes=[100.0, -50.0]  # Negative price
+                closes=[100.0, -50.0],  # Negative price
             )
 
     def test_price_data_high_low_validation(self):
@@ -132,7 +127,7 @@ class TestPriceData:
                 dates=["2026-01-01"],
                 closes=[100.0],
                 highs=[99.0],  # High < Low
-                lows=[100.0]
+                lows=[100.0],
             )
 
 
@@ -263,7 +258,7 @@ class TestVolatilityCalculator:
                 opens=[100.0, 101.0],
                 highs=[102.0],  # Wrong length
                 lows=[99.0, 100.0],
-                closes=[101.0, 102.0]
+                closes=[101.0, 102.0],
             )
 
     def test_yang_zhang_basic(self):
@@ -331,13 +326,7 @@ class TestVolatilityCalculator:
         lows = [99.0 + i * 0.2 for i in range(30)]
         closes = [101.0 + i * 0.2 for i in range(30)]
 
-        price_data = PriceData(
-            dates=dates,
-            opens=opens,
-            highs=highs,
-            lows=lows,
-            closes=closes
-        )
+        price_data = PriceData(dates=dates, opens=opens, highs=highs, lows=lows, closes=closes)
 
         # Test each method
         for method in ["close_to_close", "parkinson", "garman_klass", "yang_zhang"]:
@@ -350,10 +339,7 @@ class TestVolatilityCalculator:
         calc = VolatilityCalculator()
 
         # Price data without OHLC
-        price_data = PriceData(
-            dates=["2026-01-01", "2026-01-02"],
-            closes=[100.0, 101.0]
-        )
+        price_data = PriceData(dates=["2026-01-01", "2026-01-02"], closes=[100.0, 101.0])
 
         with pytest.raises(ValueError, match="Parkinson method requires high and low"):
             calc.calculate_from_price_data(price_data, method="parkinson")
@@ -368,7 +354,7 @@ class TestVolatilityCalculator:
             start_date="2026-01-01",
             end_date="2026-01-20",
             annualized=True,
-            metadata={"test": "value"}
+            metadata={"test": "value"},
         )
 
         d = result.to_dict()

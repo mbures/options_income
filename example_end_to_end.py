@@ -14,13 +14,18 @@ This example demonstrates:
 7. Strike optimization with sigma-based calculations
 8. Strike recommendations with assignment probabilities
 9. Covered strategies analysis (calls, puts, wheel)
-10. Weekly overlay scanner with portfolio holdings (NEW - Sprint 4)
+10. Weekly overlay scanner with portfolio holdings (Sprint 4)
     - Holdings-driven covered call recommendations
     - Overwrite cap sizing (default 25%)
     - Earnings exclusion as hard gate
     - Net credit ranking after execution costs
     - Delta-band risk profiles
     - Broker checklist generation
+11. Ladder builder for multi-week positions (NEW - Sprint 5)
+    - Laddered positions across multiple weekly expirations
+    - Position allocation strategies (Equal, FrontWeighted, BackWeighted)
+    - Strike adjustment by week (sigma scaling)
+    - Aggregate metrics and summary
 
 Data Sources:
 - Historical OHLCV: Alpha Vantage TIME_SERIES_DAILY (free, 25 req/day)
@@ -32,28 +37,30 @@ API Documentation:
 """
 
 from src.cache import LocalFileCache
-from src.config import FinnhubConfig, AlphaVantageConfig
-from src.finnhub_client import FinnhubClient
-from src.options_service import OptionsChainService
-from src.price_fetcher import AlphaVantagePriceDataFetcher
-from src.volatility import VolatilityCalculator, BlendWeights
-from src.volatility_integration import (
-    extract_atm_implied_volatility,
-    calculate_iv_term_structure
-)
-from src.strike_optimizer import StrikeOptimizer, StrikeProfile
+from src.config import AlphaVantageConfig, FinnhubConfig
 from src.covered_strategies import (
     CoveredCallAnalyzer,
     CoveredPutAnalyzer,
-    WheelStrategy,
     WheelState,
+    WheelStrategy,
 )
+from src.finnhub_client import FinnhubClient
+from src.ladder_builder import (
+    AllocationStrategy,
+    LadderBuilder,
+    LadderConfig,
+)
+from src.options_service import OptionsChainService
 from src.overlay_scanner import (
+    DeltaBand,
     OverlayScanner,
     PortfolioHolding,
     ScannerConfig,
-    DeltaBand,
 )
+from src.price_fetcher import AlphaVantagePriceDataFetcher
+from src.strike_optimizer import StrikeOptimizer, StrikeProfile
+from src.volatility import BlendWeights, VolatilityCalculator
+from src.volatility_integration import calculate_iv_term_structure, extract_atm_implied_volatility
 
 
 def main():
@@ -63,7 +70,8 @@ def main():
     print("=" * 70)
 
     # Ticker to analyze
-    symbol = "F"  # Ford
+    symbol = "NVDA"  # Ford
+    symbol_shares = 3600  # Number of shares held for overlay scanner
     print(f"\nAnalyzing: {symbol}")
 
     try:
@@ -78,21 +86,20 @@ def main():
         # Initialize file cache for persistent storage and API usage tracking
         file_cache = LocalFileCache()
         price_fetcher = AlphaVantagePriceDataFetcher(
-            av_config,
-            enable_cache=True,
-            file_cache=file_cache
+            av_config, enable_cache=True, file_cache=file_cache
         )
 
         # Show API usage status
         usage = price_fetcher.get_usage_status()
-        print(f"  API Usage Today: {usage['calls_today']}/{usage['daily_limit']} "
-              f"({usage['remaining']} remaining)")
+        print(
+            f"  API Usage Today: {usage['calls_today']}/{usage['daily_limit']} "
+            f"({usage['remaining']} remaining)"
+        )
 
         # Fetch maximum available price data (100 days for free tier)
         # This ensures sufficient history for 60-day volatility calculations
         price_data = price_fetcher.fetch_price_data(
-            symbol,
-            lookback_days=price_fetcher.MAX_LOOKBACK_DAYS
+            symbol, lookback_days=price_fetcher.MAX_LOOKBACK_DAYS
         )
 
         print(f"\n✓ Fetched {len(price_data.dates)} days of price data")
@@ -123,7 +130,7 @@ def main():
             ("Close-to-Close", "close_to_close"),
             ("Parkinson", "parkinson"),
             ("Garman-Klass", "garman_klass"),
-            ("Yang-Zhang", "yang_zhang")
+            ("Yang-Zhang", "yang_zhang"),
         ]
 
         results_20d = {}
@@ -132,25 +139,19 @@ def main():
         for name, method in methods:
             # 20-day
             result_20 = calculator.calculate_from_price_data(
-                price_data=price_data,
-                method=method,
-                window=20,
-                annualize=True
+                price_data=price_data, method=method, window=20, annualize=True
             )
             results_20d[method] = result_20
 
             # 60-day
             result_60 = calculator.calculate_from_price_data(
-                price_data=price_data,
-                method=method,
-                window=60,
-                annualize=True
+                price_data=price_data, method=method, window=60, annualize=True
             )
             results_60d[method] = result_60
 
             print(
-                f"{name:<20} {result_20.volatility*100:>11.2f}% "
-                f"{result_60.volatility*100:>11.2f}%"
+                f"{name:<20} {result_20.volatility * 100:>11.2f}% "
+                f"{result_60.volatility * 100:>11.2f}%"
             )
 
         # Step 3: Initialize Finnhub and fetch options chain
@@ -165,7 +166,7 @@ def main():
             service = OptionsChainService(client)
             options_chain = service.get_options_chain(symbol)
 
-            print(f"\n✓ Fetched options chain")
+            print("\n✓ Fetched options chain")
             print(f"  Total Contracts: {len(options_chain.contracts)}")
             print(f"  Calls: {len(options_chain.get_calls())}")
             print(f"  Puts: {len(options_chain.get_puts())}")
@@ -178,26 +179,23 @@ def main():
 
         current_price = price_data.closes[-1]
         atm_iv = extract_atm_implied_volatility(
-            options_chain=options_chain,
-            current_price=current_price
+            options_chain=options_chain, current_price=current_price
         )
 
         if atm_iv:
-            print(f"\n✓ ATM Implied Volatility: {atm_iv*100:.2f}%")
+            print(f"\n✓ ATM Implied Volatility: {atm_iv * 100:.2f}%")
 
             # Show IV term structure
             print("\nIV Term Structure:")
             term_structure = calculate_iv_term_structure(
-                options_chain=options_chain,
-                current_price=current_price,
-                num_expirations=4
+                options_chain=options_chain, current_price=current_price, num_expirations=4
             )
 
             print(f"{'Expiration':<12} {'DTE':>5} {'IV':>8}")
             print("-" * 27)
             for item in term_structure[:4]:
-                dte = item['days_to_expiry']
-                iv_pct = item['implied_volatility_pct']
+                dte = item["days_to_expiry"]
+                iv_pct = item["implied_volatility_pct"]
                 print(f"{item['expiration_date']:<12} {dte:>5} {iv_pct:>7.2f}%")
 
             # Step 5: Calculate blended volatility
@@ -207,45 +205,34 @@ def main():
 
             # Default blend: 30% RV(20d) + 20% RV(60d) + 50% IV
             blended_result = calculator.calculate_blended(
-                price_data=price_data,
-                implied_volatility=atm_iv
+                price_data=price_data, implied_volatility=atm_iv
             )
 
             print("\nDefault Blend (30% / 20% / 50%):")
-            print(f"  Short-term RV (20d): {blended_result.metadata['rv_short']*100:>6.2f}%")
-            print(f"  Long-term RV (60d):  {blended_result.metadata['rv_long']*100:>6.2f}%")
-            print(f"  Implied Volatility:  {atm_iv*100:>6.2f}%")
-            print(f"  → Blended Result:    {blended_result.volatility*100:>6.2f}%")
+            print(f"  Short-term RV (20d): {blended_result.metadata['rv_short'] * 100:>6.2f}%")
+            print(f"  Long-term RV (60d):  {blended_result.metadata['rv_long'] * 100:>6.2f}%")
+            print(f"  Implied Volatility:  {atm_iv * 100:>6.2f}%")
+            print(f"  → Blended Result:    {blended_result.volatility * 100:>6.2f}%")
 
             # Try aggressive blend (more IV weight)
-            aggressive_weights = BlendWeights(
-                realized_short=0.20,
-                realized_long=0.10,
-                implied=0.70
-            )
+            aggressive_weights = BlendWeights(realized_short=0.20, realized_long=0.10, implied=0.70)
             aggressive_result = calculator.calculate_blended(
-                price_data=price_data,
-                implied_volatility=atm_iv,
-                weights=aggressive_weights
+                price_data=price_data, implied_volatility=atm_iv, weights=aggressive_weights
             )
 
             print("\nAggressive Blend (20% / 10% / 70% - more IV):")
-            print(f"  → Blended Result:    {aggressive_result.volatility*100:>6.2f}%")
+            print(f"  → Blended Result:    {aggressive_result.volatility * 100:>6.2f}%")
 
             # Try conservative blend (more RV weight)
             conservative_weights = BlendWeights(
-                realized_short=0.40,
-                realized_long=0.40,
-                implied=0.20
+                realized_short=0.40, realized_long=0.40, implied=0.20
             )
             conservative_result = calculator.calculate_blended(
-                price_data=price_data,
-                implied_volatility=atm_iv,
-                weights=conservative_weights
+                price_data=price_data, implied_volatility=atm_iv, weights=conservative_weights
             )
 
             print("\nConservative Blend (40% / 40% / 20% - more RV):")
-            print(f"  → Blended Result:    {conservative_result.volatility*100:>6.2f}%")
+            print(f"  → Blended Result:    {conservative_result.volatility * 100:>6.2f}%")
 
             # Step 6: Summary and recommendations
             print("\n" + "-" * 70)
@@ -256,13 +243,13 @@ def main():
             best_rv_20 = results_20d["yang_zhang"]
             best_rv_60 = results_60d["yang_zhang"]
 
-            print(f"\nBest Realized Volatility Estimates (Yang-Zhang):")
-            print(f"  20-day: {best_rv_20.volatility*100:.2f}%")
-            print(f"  60-day: {best_rv_60.volatility*100:.2f}%")
+            print("\nBest Realized Volatility Estimates (Yang-Zhang):")
+            print(f"  20-day: {best_rv_20.volatility * 100:.2f}%")
+            print(f"  60-day: {best_rv_60.volatility * 100:.2f}%")
 
-            print(f"\nImplied vs. Realized:")
+            print("\nImplied vs. Realized:")
             rv_iv_ratio = best_rv_20.volatility / atm_iv
-            print(f"  ATM IV: {atm_iv*100:.2f}%")
+            print(f"  ATM IV: {atm_iv * 100:.2f}%")
             print(f"  RV/IV Ratio: {rv_iv_ratio:.2f}")
 
             if rv_iv_ratio < 0.8:
@@ -274,8 +261,8 @@ def main():
 
             print(f"  Volatility Regime: {regime}")
 
-            print(f"\nRecommended Volatility for Calculations:")
-            print(f"  → Use Blended: {blended_result.volatility*100:.2f}%")
+            print("\nRecommended Volatility for Calculations:")
+            print(f"  → Use Blended: {blended_result.volatility * 100:.2f}%")
 
             # Step 7: Strike Optimization
             print("\n" + "-" * 70)
@@ -292,6 +279,7 @@ def main():
 
             if nearest_exp:
                 from datetime import datetime
+
                 try:
                     exp_dt = datetime.fromisoformat(nearest_exp)
                     days_to_expiry = max(1, (exp_dt - datetime.now()).days)
@@ -299,7 +287,7 @@ def main():
                     days_to_expiry = 30
 
                 print(f"\nUsing expiration: {nearest_exp} ({days_to_expiry} DTE)")
-                print(f"Using blended volatility: {blended_result.volatility*100:.2f}%")
+                print(f"Using blended volatility: {blended_result.volatility * 100:.2f}%")
 
                 # Calculate strikes for all risk profiles
                 print("\nCall Strikes by Risk Profile:")
@@ -310,13 +298,19 @@ def main():
                     current_price=current_price,
                     volatility=blended_result.volatility,
                     days_to_expiry=days_to_expiry,
-                    option_type="call"
+                    option_type="call",
                 )
 
-                for profile in [StrikeProfile.AGGRESSIVE, StrikeProfile.MODERATE,
-                               StrikeProfile.CONSERVATIVE, StrikeProfile.DEFENSIVE]:
+                for profile in [
+                    StrikeProfile.AGGRESSIVE,
+                    StrikeProfile.MODERATE,
+                    StrikeProfile.CONSERVATIVE,
+                    StrikeProfile.DEFENSIVE,
+                ]:
                     result = profile_strikes[profile]
-                    prob_pct = result.assignment_probability * 100 if result.assignment_probability else 0
+                    prob_pct = (
+                        result.assignment_probability * 100 if result.assignment_probability else 0
+                    )
                     print(
                         f"{profile.value:<14} {result.sigma:>5.1f}σ "
                         f"${result.tradeable_strike:>7.2f} "
@@ -338,13 +332,19 @@ def main():
                     current_price=current_price,
                     volatility=blended_result.volatility,
                     days_to_expiry=days_to_expiry,
-                    option_type="put"
+                    option_type="put",
                 )
 
-                for profile in [StrikeProfile.AGGRESSIVE, StrikeProfile.MODERATE,
-                               StrikeProfile.CONSERVATIVE, StrikeProfile.DEFENSIVE]:
+                for profile in [
+                    StrikeProfile.AGGRESSIVE,
+                    StrikeProfile.MODERATE,
+                    StrikeProfile.CONSERVATIVE,
+                    StrikeProfile.DEFENSIVE,
+                ]:
                     result = put_profile_strikes[profile]
-                    prob_pct = result.assignment_probability * 100 if result.assignment_probability else 0
+                    prob_pct = (
+                        result.assignment_probability * 100 if result.assignment_probability else 0
+                    )
                     print(
                         f"{profile.value:<14} {result.sigma:>5.1f}σ "
                         f"${result.tradeable_strike:>7.2f} "
@@ -371,17 +371,19 @@ def main():
                     option_type="call",
                     expiration_date=nearest_exp,
                     profile=StrikeProfile.MODERATE,
-                    limit=3
+                    limit=3,
                 )
 
                 if call_recs:
-                    print(f"{'Strike':>8} {'Sigma':>6} {'P(ITM)':>7} {'Bid':>6} {'OI':>7} {'Warnings'}")
+                    print(
+                        f"{'Strike':>8} {'Sigma':>6} {'P(ITM)':>7} {'Bid':>6} {'OI':>7} {'Warnings'}"
+                    )
                     print("-" * 55)
                     for rec in call_recs:
                         warnings_str = ", ".join(rec.warnings[:1]) if rec.warnings else "-"
                         print(
                             f"${rec.strike:>7.2f} {rec.sigma_distance:>5.2f}σ "
-                            f"{rec.assignment_probability*100:>6.1f}% "
+                            f"{rec.assignment_probability * 100:>6.1f}% "
                             f"${rec.bid if rec.bid else 0:>5.2f} "
                             f"{rec.open_interest if rec.open_interest else 0:>6} "
                             f"{warnings_str}"
@@ -398,17 +400,19 @@ def main():
                     option_type="put",
                     expiration_date=nearest_exp,
                     profile=StrikeProfile.CONSERVATIVE,
-                    limit=3
+                    limit=3,
                 )
 
                 if put_recs:
-                    print(f"{'Strike':>8} {'Sigma':>6} {'P(ITM)':>7} {'Bid':>6} {'OI':>7} {'Warnings'}")
+                    print(
+                        f"{'Strike':>8} {'Sigma':>6} {'P(ITM)':>7} {'Bid':>6} {'OI':>7} {'Warnings'}"
+                    )
                     print("-" * 55)
                     for rec in put_recs:
                         warnings_str = ", ".join(rec.warnings[:1]) if rec.warnings else "-"
                         print(
                             f"${rec.strike:>7.2f} {rec.sigma_distance:>5.2f}σ "
-                            f"{rec.assignment_probability*100:>6.1f}% "
+                            f"{rec.assignment_probability * 100:>6.1f}% "
                             f"${rec.bid if rec.bid else 0:>5.2f} "
                             f"{rec.open_interest if rec.open_interest else 0:>6} "
                             f"{warnings_str}"
@@ -433,11 +437,13 @@ def main():
                     current_price=current_price,
                     volatility=blended_result.volatility,
                     expiration_date=nearest_exp,
-                    limit=3
+                    limit=3,
                 )
 
                 if cc_recs:
-                    print(f"{'Strike':>8} {'Premium':>8} {'If Flat':>10} {'If Called':>10} {'Ann.Ret':>8}")
+                    print(
+                        f"{'Strike':>8} {'Premium':>8} {'If Flat':>10} {'If Called':>10} {'Ann.Ret':>8}"
+                    )
                     print("-" * 50)
                     for cc in cc_recs:
                         print(
@@ -445,7 +451,7 @@ def main():
                             f"${cc.premium_per_share:>7.2f} "
                             f"${cc.profit_if_flat:>9.2f} "
                             f"${cc.max_profit:>9.2f} "
-                            f"{cc.annualized_return_if_flat*100:>7.1f}%"
+                            f"{cc.annualized_return_if_flat * 100:>7.1f}%"
                         )
                         if cc.warnings:
                             print(f"         ⚠ {cc.warnings[0]}")
@@ -459,11 +465,13 @@ def main():
                     current_price=current_price,
                     volatility=blended_result.volatility,
                     expiration_date=nearest_exp,
-                    limit=3
+                    limit=3,
                 )
 
                 if csp_recs:
-                    print(f"{'Strike':>8} {'Premium':>8} {'Collat':>9} {'Eff.Buy':>8} {'Ann.Ret':>8}")
+                    print(
+                        f"{'Strike':>8} {'Premium':>8} {'Collat':>9} {'Eff.Buy':>8} {'Ann.Ret':>8}"
+                    )
                     print("-" * 50)
                     for csp in csp_recs:
                         print(
@@ -471,7 +479,7 @@ def main():
                             f"${csp.premium_per_share:>7.2f} "
                             f"${csp.collateral_required:>8.0f} "
                             f"${csp.effective_purchase_price:>7.2f} "
-                            f"{csp.annualized_return_if_otm*100:>7.1f}%"
+                            f"{csp.annualized_return_if_otm * 100:>7.1f}%"
                         )
                         if csp.warnings:
                             print(f"         ⚠ {csp.warnings[0]}")
@@ -488,7 +496,7 @@ def main():
                     current_price=current_price,
                     volatility=blended_result.volatility,
                     expiration_date=nearest_exp,
-                    profile=StrikeProfile.MODERATE
+                    profile=StrikeProfile.MODERATE,
                 )
 
                 if wheel_rec:
@@ -506,9 +514,9 @@ def main():
                 holdings = [
                     PortfolioHolding(
                         symbol=symbol,
-                        shares=500,
+                        shares=symbol_shares,
                         cost_basis=current_price * 0.9,  # Example: 10% gain
-                        account_type="taxable"
+                        account_type="taxable",
                     )
                 ]
 
@@ -519,7 +527,7 @@ def main():
                     delta_band=DeltaBand.CONSERVATIVE,  # Conservative 10-15% P(ITM)
                     skip_earnings_default=True,
                     min_weekly_yield_bps=10.0,  # 10 bps/week (~5% annualized)
-                    min_friction_multiple=2.0   # Net credit >= 2x friction costs
+                    min_friction_multiple=2.0,  # Net credit >= 2x friction costs
                 )
 
                 # Initialize scanner
@@ -527,19 +535,21 @@ def main():
                     scanner = OverlayScanner(
                         finnhub_client=scan_client,
                         strike_optimizer=optimizer,
-                        config=scanner_config
+                        config=scanner_config,
                     )
 
                     # Scan the portfolio
                     print(f"\nScanning portfolio with {len(holdings)} holdings:")
-                    print(f"  Settings: {scanner_config.overwrite_cap_pct:.0f}% overwrite cap, "
-                          f"{scanner_config.delta_band.value} delta band")
+                    print(
+                        f"  Settings: {scanner_config.overwrite_cap_pct:.0f}% overwrite cap, "
+                        f"{scanner_config.delta_band.value} delta band"
+                    )
 
                     scan_results = scanner.scan_portfolio(
                         holdings=holdings,
                         current_prices={symbol: current_price},
                         options_chains={symbol: options_chain},
-                        volatilities={symbol: blended_result.volatility}
+                        volatilities={symbol: blended_result.volatility},
                     )
 
                     # Display scan results
@@ -548,12 +558,16 @@ def main():
                         print(f"\n✓ Scan complete for {symbol}:")
                         print(f"  Shares: {result.shares_held}")
                         print(f"  Contracts available: {result.contracts_available}")
-                        print(f"  Earnings conflict: {'Yes' if result.has_earnings_conflict else 'No'}")
+                        print(
+                            f"  Earnings conflict: {'Yes' if result.has_earnings_conflict else 'No'}"
+                        )
 
                         if result.recommended_strikes:
-                            print(f"\n  Top Recommendations (ranked by net credit):")
-                            print(f"  {'Strike':>8} {'Exp':>12} {'Cts':>4} {'Delta':>6} "
-                                  f"{'$/Ct':>7} {'Total$':>8} {'Yield':>7} {'OI':>6}")
+                            print("\n  Top Recommendations (ranked by net credit):")
+                            print(
+                                f"  {'Strike':>8} {'Exp':>12} {'Cts':>4} {'Delta':>6} "
+                                f"{'$/Ct':>7} {'Total$':>8} {'Yield':>7} {'OI':>6}"
+                            )
                             print("  " + "-" * 72)
 
                             for strike in result.recommended_strikes[:3]:
@@ -582,9 +596,11 @@ def main():
                                 print(f"    Expiration: {checklist.expiration}")
                                 print(f"    Limit Price: ${checklist.limit_price:.2f}")
                                 print(f"    Min Credit: ${checklist.min_acceptable_credit:.2f}")
-                                print(f"    ─────────────────────────────────────")
+                                print("    ─────────────────────────────────────")
                                 print(f"    Expected Return (per contract): ${per_ct:.2f}")
-                                print(f"    Expected Return (total):        ${top.total_net_credit:.2f}")
+                                print(
+                                    f"    Expected Return (total):        ${top.total_net_credit:.2f}"
+                                )
                                 print(f"    Verification steps: {len(checklist.checks)}")
                         else:
                             print("\n  No recommendations - all strikes filtered out")
@@ -595,18 +611,28 @@ def main():
                                 rejection_counts = {}
                                 for strike in result.rejected_strikes:
                                     for reason in strike.rejection_reasons:
-                                        rejection_counts[reason.value] = rejection_counts.get(reason.value, 0) + 1
+                                        rejection_counts[reason.value] = (
+                                            rejection_counts.get(reason.value, 0) + 1
+                                        )
                                 print("  Rejection reasons summary:")
-                                for reason, count in sorted(rejection_counts.items(), key=lambda x: -x[1])[:5]:
+                                for reason, count in sorted(
+                                    rejection_counts.items(), key=lambda x: -x[1]
+                                )[:5]:
                                     print(f"    • {reason}: {count}")
 
                                 # Near-miss analysis
                                 if result.near_miss_candidates:
-                                    print("\n  ═══════════════════════════════════════════════════════════════════════════")
+                                    print(
+                                        "\n  ═══════════════════════════════════════════════════════════════════════════"
+                                    )
                                     print("  NEAR-MISS ANALYSIS (Top 5 closest to passing)")
-                                    print("  ═══════════════════════════════════════════════════════════════════════════")
-                                    print(f"  {'#':>2} {'Strike':>8} {'Exp':>12} {'Cts':>3} {'Delta':>6} {'Bid':>6} "
-                                          f"{'OI':>6} {'$/Ct':>7} {'Total$':>8} {'Score':>5}")
+                                    print(
+                                        "  ═══════════════════════════════════════════════════════════════════════════"
+                                    )
+                                    print(
+                                        f"  {'#':>2} {'Strike':>8} {'Exp':>12} {'Cts':>3} {'Delta':>6} {'Bid':>6} "
+                                        f"{'OI':>6} {'$/Ct':>7} {'Total$':>8} {'Score':>5}"
+                                    )
                                     print("  " + "-" * 82)
 
                                     for i, nm in enumerate(result.near_miss_candidates, 1):
@@ -627,30 +653,157 @@ def main():
                                         # Show rejection details
                                         print(f"      Rejections ({len(nm.rejection_details)}):")
                                         for detail in nm.rejection_details:
-                                            binding_marker = " ◄ BINDING" if nm.binding_constraint and detail.reason == nm.binding_constraint.reason else ""
-                                            print(f"        • {detail.reason.value}: {detail.margin_display}{binding_marker}")
+                                            binding_marker = (
+                                                " ◄ BINDING"
+                                                if nm.binding_constraint
+                                                and detail.reason == nm.binding_constraint.reason
+                                                else ""
+                                            )
+                                            print(
+                                                f"        • {detail.reason.value}: {detail.margin_display}{binding_marker}"
+                                            )
 
                                         print()  # Blank line between candidates
                     elif result and result.error:
                         print(f"\n  ⚠ Error: {result.error}")
+
+                # Step 11: Ladder Builder
+                print("\n" + "-" * 70)
+                print("STEP 11: Ladder Builder (NEW - Sprint 5)")
+                print("-" * 70)
+
+                # Configure ladder with equal allocation
+                ladder_config = LadderConfig(
+                    allocation_strategy=AllocationStrategy.EQUAL,
+                    weeks_to_ladder=4,
+                    base_sigma=1.5,
+                    sigma_adjustment_per_week=0.25,
+                    skip_earnings_weeks=True,
+                )
+
+                # Initialize builder
+                builder = LadderBuilder(
+                    finnhub_client=scan_client, strike_optimizer=optimizer, config=ladder_config
+                )
+
+                # Build ladder for the symbol
+                print(f"\nBuilding ladder for {symbol} with {holdings[0].shares} shares:")
+                print(f"  Strategy: {ladder_config.allocation_strategy.value}")
+                print(f"  Weeks: {ladder_config.weeks_to_ladder}")
+                print(f"  Base Sigma: {ladder_config.base_sigma}σ")
+
+                ladder_result = builder.build_ladder(
+                    symbol=symbol,
+                    shares=holdings[0].shares,
+                    current_price=current_price,
+                    volatility=blended_result.volatility,
+                    options_chain=options_chain,
+                    option_type="call",
+                )
+
+                if ladder_result.legs:
+                    print(f"\n✓ Ladder built with {len(ladder_result.legs)} legs:")
+                    print(f"  Shares in ladder: {ladder_result.shares_to_ladder}")
+                    print(f"  Total contracts: {ladder_result.total_contracts}")
+                    print(f"  Actionable legs: {ladder_result.actionable_count}")
+
+                    print(
+                        f"\n  {'Week':>4} {'Expiration':>12} {'DTE':>4} {'Strike':>8} {'Cts':>4} "
+                        f"{'Sigma':>6} {'Delta':>6} {'Bid':>6} {'Premium':>9}"
+                    )
+                    print("  " + "-" * 75)
+
+                    for leg in ladder_result.legs:
+                        if leg.is_actionable:
+                            print(
+                                f"  {leg.week_number:>4} "
+                                f"{leg.expiration_date:>12} "
+                                f"{leg.days_to_expiry:>4} "
+                                f"${leg.strike:>7.2f} "
+                                f"{leg.contracts:>4} "
+                                f"{leg.sigma_used:>5.2f}σ "
+                                f"{leg.delta:>5.3f} "
+                                f"${leg.bid:>5.2f} "
+                                f"${leg.gross_premium:>8.2f}"
+                            )
+                        else:
+                            print(
+                                f"  {leg.week_number:>4} "
+                                f"{leg.expiration_date:>12} "
+                                f"{leg.days_to_expiry:>4} "
+                                f"{'---':>8} "
+                                f"{leg.contracts:>4} "
+                                f"{'---':>6} "
+                                f"{'---':>6} "
+                                f"{'---':>6} "
+                                f"  {leg.rejection_reason or 'N/A'}"
+                            )
+
+                    print("\n  Summary:")
+                    print(f"    Total Gross Premium: ${ladder_result.total_gross_premium:.2f}")
+                    print(f"    Total Net Premium (est): ${ladder_result.total_net_premium:.2f}")
+                    print(f"    Weighted Avg Delta: {ladder_result.weighted_avg_delta:.4f}")
+                    print(f"    Weighted Avg DTE: {ladder_result.weighted_avg_dte:.1f} days")
+                    print(
+                        f"    Weighted Avg Yield: {ladder_result.weighted_avg_yield_pct:.2f}% annualized"
+                    )
+
+                    if ladder_result.warnings:
+                        print("\n  Warnings:")
+                        for warning in ladder_result.warnings:
+                            print(f"    ⚠ {warning}")
+
+                    # Show front-weighted comparison
+                    print("\n  Alternative: Front-Weighted Allocation")
+                    fw_config = LadderConfig(
+                        allocation_strategy=AllocationStrategy.FRONT_WEIGHTED,
+                        weeks_to_ladder=4,
+                        base_sigma=1.5,
+                    )
+                    fw_builder = LadderBuilder(scan_client, optimizer, fw_config)
+                    fw_result = fw_builder.build_ladder(
+                        symbol=symbol,
+                        shares=holdings[0].shares,
+                        current_price=current_price,
+                        volatility=blended_result.volatility,
+                        options_chain=options_chain,
+                        option_type="call",
+                    )
+
+                    if fw_result.total_contracts > 0:
+                        print(
+                            f"    Contracts by week: {[leg.contracts for leg in fw_result.legs if leg.is_actionable]}"
+                        )
+                        print(f"    Total Gross Premium: ${fw_result.total_gross_premium:.2f}")
+                        print(f"    Weighted Avg Delta: {fw_result.weighted_avg_delta:.4f}")
+                else:
+                    print("\n  ⚠ Could not build ladder - no valid expirations found")
 
             # Final summary
             print("\n" + "=" * 70)
             print("SUMMARY")
             print("=" * 70)
             print(f"\nStock: {symbol} @ ${current_price:.2f}")
-            print(f"Blended Volatility: {blended_result.volatility*100:.2f}%")
-            print(f"ATM Implied Volatility: {atm_iv*100:.2f}%")
+            print(f"Blended Volatility: {blended_result.volatility * 100:.2f}%")
+            print(f"ATM Implied Volatility: {atm_iv * 100:.2f}%")
             print(f"Volatility Regime: {regime}")
 
             if nearest_exp and profile_strikes and put_profile_strikes:
                 mod_call = profile_strikes[StrikeProfile.MODERATE]
                 cons_put = put_profile_strikes[StrikeProfile.CONSERVATIVE]
-                mod_call_prob = mod_call.assignment_probability * 100 if mod_call.assignment_probability else 0
-                cons_put_prob = cons_put.assignment_probability * 100 if cons_put.assignment_probability else 0
+                mod_call_prob = (
+                    mod_call.assignment_probability * 100 if mod_call.assignment_probability else 0
+                )
+                cons_put_prob = (
+                    cons_put.assignment_probability * 100 if cons_put.assignment_probability else 0
+                )
                 print(f"\nSuggested Strikes ({nearest_exp}):")
-                print(f"  Covered Call (Moderate): ${mod_call.tradeable_strike:.2f} ({mod_call_prob:.1f}% P(ITM))")
-                print(f"  Cash-Secured Put (Conservative): ${cons_put.tradeable_strike:.2f} ({cons_put_prob:.1f}% P(ITM))")
+                print(
+                    f"  Covered Call (Moderate): ${mod_call.tradeable_strike:.2f} ({mod_call_prob:.1f}% P(ITM))"
+                )
+                print(
+                    f"  Cash-Secured Put (Conservative): ${cons_put.tradeable_strike:.2f} ({cons_put_prob:.1f}% P(ITM))"
+                )
 
         else:
             print("\n⚠ Could not extract implied volatility from options chain")
@@ -664,6 +817,7 @@ def main():
     except Exception as e:
         print(f"\n⚠ ERROR: {e}")
         import traceback
+
         traceback.print_exc()
 
 

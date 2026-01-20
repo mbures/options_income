@@ -38,16 +38,17 @@ Both fetchers return PriceData objects compatible with the volatility calculator
 
 import logging
 import time
-from typing import Optional, Dict, Any
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Optional
 
-from .volatility import PriceData
-from .finnhub_client import FinnhubClient, FinnhubAPIError
 from .alphavantage_client import (
     AlphaVantageClient,
-    AlphaVantageAPIError,
-    AlphaVantageRateLimitError
 )
+from .finnhub_client import FinnhubClient
+from .volatility import PriceData
+
+if TYPE_CHECKING:
+    from .cache import LocalFileCache
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CacheEntry:
     """Cache entry for price data."""
+
     data: PriceData
     timestamp: float
     symbol: str
@@ -81,7 +83,7 @@ class PriceDataCache:
         Args:
             max_age_seconds: Maximum age of cached data in seconds (default: 1 hour)
         """
-        self._cache: Dict[str, CacheEntry] = {}
+        self._cache: dict[str, CacheEntry] = {}
         self.max_age_seconds = max_age_seconds
         logger.debug(f"PriceDataCache initialized with max_age={max_age_seconds}s")
 
@@ -117,10 +119,7 @@ class PriceDataCache:
         """
         cache_key = f"{symbol}:{lookback_days}"
         self._cache[cache_key] = CacheEntry(
-            data=data,
-            timestamp=time.time(),
-            symbol=symbol,
-            lookback_days=lookback_days
+            data=data, timestamp=time.time(), symbol=symbol, lookback_days=lookback_days
         )
         logger.debug(f"Cached price data for {cache_key}")
 
@@ -131,7 +130,7 @@ class PriceDataCache:
 
     def clear_symbol(self, symbol: str) -> None:
         """Clear cached data for a specific symbol."""
-        keys_to_remove = [k for k in self._cache.keys() if k.startswith(f"{symbol}:")]
+        keys_to_remove = [k for k in self._cache if k.startswith(f"{symbol}:")]
         for key in keys_to_remove:
             del self._cache[key]
         logger.debug(f"Cleared cache for {symbol}")
@@ -155,7 +154,7 @@ class PriceDataFetcher:
         self,
         client: FinnhubClient,
         cache: Optional[PriceDataCache] = None,
-        enable_cache: bool = True
+        enable_cache: bool = True,
     ):
         """
         Initialize price data fetcher.
@@ -169,15 +168,11 @@ class PriceDataFetcher:
         self.enable_cache = enable_cache
         self.cache = cache if cache is not None else PriceDataCache()
         logger.debug(
-            f"PriceDataFetcher initialized "
-            f"(caching={'enabled' if enable_cache else 'disabled'})"
+            f"PriceDataFetcher initialized (caching={'enabled' if enable_cache else 'disabled'})"
         )
 
     def fetch_price_data(
-        self,
-        symbol: str,
-        lookback_days: int = 60,
-        resolution: str = "D"
+        self, symbol: str, lookback_days: int = 60, resolution: str = "D"
     ) -> PriceData:
         """
         Fetch historical price data for a symbol.
@@ -212,11 +207,7 @@ class PriceDataFetcher:
 
         return price_data
 
-    def fetch_multiple_windows(
-        self,
-        symbol: str,
-        windows: list = None
-    ) -> Dict[int, PriceData]:
+    def fetch_multiple_windows(self, symbol: str, windows: list = None) -> dict[int, PriceData]:
         """
         Fetch price data for multiple lookback windows.
 
@@ -279,7 +270,7 @@ class AlphaVantagePriceDataFetcher:
         config_or_client,
         cache: Optional[PriceDataCache] = None,
         enable_cache: bool = True,
-        file_cache: Optional["LocalFileCache"] = None
+        file_cache: Optional["LocalFileCache"] = None,
     ):
         """
         Initialize Alpha Vantage price data fetcher.
@@ -310,10 +301,7 @@ class AlphaVantagePriceDataFetcher:
         return self._client.config
 
     def fetch_price_data(
-        self,
-        symbol: str,
-        lookback_days: int = 60,
-        resolution: str = "D"
+        self, symbol: str, lookback_days: int = 60, resolution: str = "D"
     ) -> PriceData:
         """
         Fetch historical price data for a symbol from Alpha Vantage.
@@ -354,10 +342,8 @@ class AlphaVantagePriceDataFetcher:
         return price_data
 
     def fetch_multiple_windows(
-        self,
-        symbol: str,
-        windows: Optional[list] = None
-    ) -> Dict[int, PriceData]:
+        self, symbol: str, windows: Optional[list] = None
+    ) -> dict[int, PriceData]:
         """
         Fetch price data for multiple lookback windows.
 
@@ -388,7 +374,7 @@ class AlphaVantagePriceDataFetcher:
         else:
             self.cache.clear()
 
-    def get_usage_status(self) -> Dict[str, Any]:
+    def get_usage_status(self) -> dict[str, Any]:
         """
         Get current Alpha Vantage API usage status.
 

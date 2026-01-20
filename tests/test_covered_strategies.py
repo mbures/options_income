@@ -9,24 +9,25 @@ Tests cover:
 - Warning generation for liquidity, earnings, early assignment
 """
 
-import pytest
 from datetime import datetime, timedelta
 
+import pytest
+
 from src.covered_strategies import (
-    CoveredCallAnalyzer,
-    CoveredPutAnalyzer,
-    WheelStrategy,
-    WheelState,
-    CoveredCallResult,
-    CoveredPutResult,
-    WheelRecommendation,
-    WheelCycleMetrics,
+    MAX_BID_ASK_SPREAD_PCT,
     MIN_BID_PRICE,
     MIN_OPEN_INTEREST,
-    MAX_BID_ASK_SPREAD_PCT,
+    CoveredCallAnalyzer,
+    CoveredCallResult,
+    CoveredPutAnalyzer,
+    CoveredPutResult,
+    WheelCycleMetrics,
+    WheelRecommendation,
+    WheelState,
+    WheelStrategy,
 )
-from src.strike_optimizer import StrikeOptimizer, StrikeProfile
 from src.models import OptionContract, OptionsChain
+from src.strike_optimizer import StrikeOptimizer, StrikeProfile
 
 
 class TestCoveredCallAnalyzer:

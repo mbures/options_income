@@ -28,12 +28,13 @@ Usage:
 """
 
 import logging
-from typing import Optional, Dict, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 import requests
 
 if TYPE_CHECKING:
     from .cache import LocalFileCache
+    from .config import AlphaVantageConfig
 
 from .volatility import PriceData
 
@@ -73,11 +74,7 @@ class AlphaVantageClient:
     DAILY_LIMIT = 25  # Free tier daily API call limit
     MAX_LOOKBACK_DAYS = 100  # Free tier max data points (compact output)
 
-    def __init__(
-        self,
-        config: "AlphaVantageConfig",
-        file_cache: Optional["LocalFileCache"] = None
-    ):
+    def __init__(self, config: "AlphaVantageConfig", file_cache: Optional["LocalFileCache"] = None):
         """
         Initialize Alpha Vantage client.
 
@@ -86,25 +83,18 @@ class AlphaVantageClient:
             file_cache: Optional LocalFileCache for persistent storage and usage tracking
         """
         # Import here to avoid circular imports
-        from .config import AlphaVantageConfig
 
         self.config = config
         self._file_cache = file_cache
         self._session = requests.Session()
-        self._session.headers.update({
-            "Accept": "application/json",
-            "User-Agent": "AlphaVantageClient/2.0"
-        })
+        self._session.headers.update(
+            {"Accept": "application/json", "User-Agent": "AlphaVantageClient/2.0"}
+        )
         logger.info(
-            f"AlphaVantageClient initialized "
-            f"(file_cache={'enabled' if file_cache else 'disabled'})"
+            f"AlphaVantageClient initialized (file_cache={'enabled' if file_cache else 'disabled'})"
         )
 
-    def fetch_daily_prices(
-        self,
-        symbol: str,
-        lookback_days: int = 60
-    ) -> PriceData:
+    def fetch_daily_prices(self, symbol: str, lookback_days: int = 60) -> PriceData:
         """
         Fetch historical daily price data for a symbol.
 
@@ -192,16 +182,14 @@ class AlphaVantageClient:
                 "high": price_data.highs[i] if price_data.highs else None,
                 "low": price_data.lows[i] if price_data.lows else None,
                 "close": price_data.closes[i],
-                "volume": price_data.volumes[i] if price_data.volumes else None
+                "volume": price_data.volumes[i] if price_data.volumes else None,
             }
 
         count = self._file_cache.set_stock_prices(symbol, prices_dict)
         logger.debug(f"Cached {count} price points for {symbol}")
 
     def _build_price_data_from_cache(
-        self,
-        cached_prices: Dict[str, Dict[str, Any]],
-        lookback_days: int
+        self, cached_prices: dict[str, dict[str, Any]], lookback_days: int
     ) -> PriceData:
         """
         Build PriceData from cached price points.
@@ -238,15 +226,15 @@ class AlphaVantageClient:
             dates=dates,
             opens=opens if all(o is not None for o in opens) else None,
             highs=highs if all(h is not None for h in highs) else None,
-            lows=lows if all(l is not None for l in lows) else None,
+            lows=lows if all(low is not None for low in lows) else None,
             closes=closes,
             volumes=volumes if all(v is not None for v in volumes) else None,
             adjusted_closes=None,
             dividends=None,
-            split_coefficients=None
+            split_coefficients=None,
         )
 
-    def _call_time_series_daily(self, symbol: str) -> Dict[str, Any]:
+    def _call_time_series_daily(self, symbol: str) -> dict[str, Any]:
         """
         Call TIME_SERIES_DAILY API endpoint.
 
@@ -264,24 +252,22 @@ class AlphaVantageClient:
             "function": "TIME_SERIES_DAILY",
             "symbol": symbol,
             "apikey": self.config.api_key,
-            "outputsize": "compact"
+            "outputsize": "compact",
         }
 
         try:
             response = self._session.get(
-                self.config.base_url,
-                params=params,
-                timeout=self.config.timeout
+                self.config.base_url, params=params, timeout=self.config.timeout
             )
             response.raise_for_status()
             data = response.json()
 
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as err:
             raise AlphaVantageAPIError(
                 f"Request timeout after {self.config.timeout}s for symbol {symbol}"
-            )
+            ) from err
         except requests.exceptions.RequestException as e:
-            raise AlphaVantageAPIError(f"API request failed: {e}")
+            raise AlphaVantageAPIError(f"API request failed: {e}") from e
 
         # Check for API errors in response
         if "Error Message" in data:
@@ -296,10 +282,7 @@ class AlphaVantageClient:
         return data
 
     def _parse_daily_response(
-        self,
-        data: Dict[str, Any],
-        symbol: str,
-        lookback_days: int
+        self, data: dict[str, Any], symbol: str, lookback_days: int
     ) -> PriceData:
         """
         Parse TIME_SERIES_DAILY response into PriceData.
@@ -345,8 +328,7 @@ class AlphaVantageClient:
             volumes.append(int(float(day_data["5. volume"])))
 
         logger.info(
-            f"Parsed {len(dates)} days of price data for {symbol} "
-            f"({dates[0]} to {dates[-1]})"
+            f"Parsed {len(dates)} days of price data for {symbol} ({dates[0]} to {dates[-1]})"
         )
 
         # Validate data quality
@@ -361,16 +343,10 @@ class AlphaVantageClient:
             adjusted_closes=None,
             volumes=volumes,
             dividends=None,
-            split_coefficients=None
+            split_coefficients=None,
         )
 
-    def _validate_price_data(
-        self,
-        opens: list,
-        highs: list,
-        lows: list,
-        closes: list
-    ) -> None:
+    def _validate_price_data(self, opens: list, highs: list, lows: list, closes: list) -> None:
         """
         Validate price data quality.
 
@@ -393,10 +369,10 @@ class AlphaVantageClient:
             if highs[i] / lows[i] > 1.5:
                 logger.warning(
                     f"Large intraday range at index {i}: "
-                    f"high={highs[i]}, low={lows[i]} ({highs[i]/lows[i]:.2f}x)"
+                    f"high={highs[i]}, low={lows[i]} ({highs[i] / lows[i]:.2f}x)"
                 )
 
-    def get_usage_status(self) -> Dict[str, Any]:
+    def get_usage_status(self) -> dict[str, Any]:
         """
         Get current Alpha Vantage API usage status.
 
@@ -416,7 +392,7 @@ class AlphaVantageClient:
             "calls_today": usage,
             "daily_limit": self.DAILY_LIMIT,
             "remaining": self.DAILY_LIMIT - usage,
-            "percentage_used": (usage / self.DAILY_LIMIT) * 100
+            "percentage_used": (usage / self.DAILY_LIMIT) * 100,
         }
 
     def close(self) -> None:

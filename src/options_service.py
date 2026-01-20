@@ -2,11 +2,10 @@
 
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
+from typing import Any, Optional
 
+from .finnhub_client import FinnhubClient
 from .models import OptionContract, OptionsChain
-from .finnhub_client import FinnhubClient, FinnhubAPIError
-
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +74,7 @@ class OptionsChainService:
             retrieved_at=datetime.now(timezone.utc).isoformat(),
         )
 
-    def _validate_response(self, data: Dict[str, Any]) -> None:
+    def _validate_response(self, data: dict[str, Any]) -> None:
         """
         Validate API response structure.
 
@@ -98,7 +97,7 @@ class OptionsChainService:
                 "Empty response from API. Symbol may not have options available."
             )
 
-    def _parse_contracts(self, raw_data: Dict[str, Any], symbol: str) -> List[OptionContract]:
+    def _parse_contracts(self, raw_data: dict[str, Any], symbol: str) -> list[OptionContract]:
         """
         Parse raw API response into OptionContract objects.
 
@@ -112,7 +111,7 @@ class OptionsChainService:
         Raises:
             DataValidationError: If no valid contracts found
         """
-        contracts: List[OptionContract] = []
+        contracts: list[OptionContract] = []
 
         # Try different response structures
         # Structure 1: {"data": [expiration_groups]} where each group has "options": {"CALL": [], "PUT": []}
@@ -136,12 +135,14 @@ class OptionsChainService:
 
         if not contracts:
             raise DataValidationError(
-                "No contract data found in response. " "API response structure may have changed."
+                "No contract data found in response. API response structure may have changed."
             )
 
         return contracts
 
-    def _extract_contracts_from_list(self, data_list: List[Any], symbol: str) -> List[OptionContract]:
+    def _extract_contracts_from_list(
+        self, data_list: list[Any], symbol: str
+    ) -> list[OptionContract]:
         """
         Extract and parse contracts from a list of items.
 
@@ -156,7 +157,7 @@ class OptionsChainService:
         Returns:
             List of parsed OptionContract objects
         """
-        contracts: List[OptionContract] = []
+        contracts: list[OptionContract] = []
         parse_errors = 0
         total_items = 0
 
@@ -192,16 +193,20 @@ class OptionsChainService:
                         logger.debug(f"Failed to parse contract: {e}")
 
         if parse_errors > 0:
-            logger.info(f"Parsed {len(contracts)} contracts, {parse_errors} errors out of {total_items} items")
+            logger.info(
+                f"Parsed {len(contracts)} contracts, {parse_errors} errors out of {total_items} items"
+            )
 
         if not contracts and total_items > 0:
             raise DataValidationError("No valid contracts found. All contract parsing failed.")
 
         return contracts
 
-    def _parse_contracts_from_list(self, data_list: List[Dict[str, Any]], symbol: str) -> List[OptionContract]:
+    def _parse_contracts_from_list(
+        self, data_list: list[dict[str, Any]], symbol: str
+    ) -> list[OptionContract]:
         """Parse a list of contract dictionaries."""
-        contracts: List[OptionContract] = []
+        contracts: list[OptionContract] = []
         parse_errors = 0
 
         for item in data_list:
@@ -218,7 +223,7 @@ class OptionsChainService:
 
         return contracts
 
-    def _parse_single_contract(self, data: Dict[str, Any], symbol: str) -> OptionContract:
+    def _parse_single_contract(self, data: dict[str, Any], symbol: str) -> OptionContract:
         """
         Parse a single contract from API data.
 
@@ -321,7 +326,7 @@ class OptionsChainService:
             logger.debug(f"Could not convert {value} to int")
             return None
 
-    def _extract_contracts_from_response(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _extract_contracts_from_response(self, data: dict[str, Any]) -> list[dict[str, Any]]:
         """
         Extract contracts from alternate response structures.
 
@@ -345,7 +350,7 @@ class OptionsChainService:
                     contracts.extend(value)
                 elif isinstance(value, dict):
                     # Might be grouped by type (CALL/PUT) or expiration
-                    for sub_key, sub_value in value.items():
+                    for _sub_key, sub_value in value.items():
                         if isinstance(sub_value, list):
                             # Found a list of contracts
                             contracts.extend(sub_value)

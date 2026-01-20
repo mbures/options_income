@@ -613,7 +613,7 @@ A Python application that interfaces with Finnhub and Alpha Vantage APIs to:
   - Finnhub Stock API (https://finnhub.io)
   - Alpha Vantage API (https://www.alphavantage.co)
 - **Testing**: pytest
-- **Linting**: pylint, black
+- **Linting/Formatting**: ruff
 - **Type Checking**: mypy
 
 ### 5.2 API Endpoints
@@ -1140,7 +1140,7 @@ The following ML enhancements are documented for future consideration but are **
 |---|-----------|--------------|
 | AC-31 | All code documented and type-hinted | Docstring coverage |
 | AC-32 | Unit test coverage >80% | Coverage report |
-| AC-33 | Code passes linting (pylint >9.0) | Linting report |
+| AC-33 | Code passes linting (ruff check) | Linting report |
 | AC-34 | Complete calculation in <500ms | Performance test |
 | AC-35 | README provides clear setup instructions | Manual review |
 

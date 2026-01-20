@@ -1,18 +1,19 @@
 """Unit tests for price data fetcher module."""
 
-import pytest
 import time
-from unittest.mock import Mock, patch
 from datetime import datetime
+from unittest.mock import Mock, patch
 
+import pytest
+
+from src.finnhub_client import FinnhubAPIError, FinnhubClient
 from src.price_fetcher import (
-    PriceDataFetcher,
-    PriceDataCache,
+    AlphaVantagePriceDataFetcher,
     CacheEntry,
-    AlphaVantagePriceDataFetcher
+    PriceDataCache,
+    PriceDataFetcher,
 )
 from src.volatility import PriceData
-from src.finnhub_client import FinnhubClient, FinnhubAPIError
 
 
 class TestCacheEntry:
@@ -21,12 +22,7 @@ class TestCacheEntry:
     def test_cache_entry_creation(self):
         """Test cache entry creation."""
         price_data = PriceData(dates=["2026-01-01"], closes=[100.0])
-        entry = CacheEntry(
-            data=price_data,
-            timestamp=time.time(),
-            symbol="F",
-            lookback_days=60
-        )
+        entry = CacheEntry(data=price_data, timestamp=time.time(), symbol="F", lookback_days=60)
 
         assert entry.symbol == "F"
         assert entry.lookback_days == 60
@@ -35,12 +31,7 @@ class TestCacheEntry:
     def test_cache_entry_is_valid_fresh(self):
         """Test that fresh cache entry is valid."""
         price_data = PriceData(dates=["2026-01-01"], closes=[100.0])
-        entry = CacheEntry(
-            data=price_data,
-            timestamp=time.time(),
-            symbol="F",
-            lookback_days=60
-        )
+        entry = CacheEntry(data=price_data, timestamp=time.time(), symbol="F", lookback_days=60)
 
         assert entry.is_valid(max_age_seconds=3600)
 
@@ -51,7 +42,7 @@ class TestCacheEntry:
             data=price_data,
             timestamp=time.time() - 7200,  # 2 hours ago
             symbol="F",
-            lookback_days=60
+            lookback_days=60,
         )
 
         assert not entry.is_valid(max_age_seconds=3600)  # 1 hour max age
@@ -147,9 +138,11 @@ class TestPriceDataFetcher:
     def create_mock_price_data(self, n_days=60):
         """Create mock PriceData."""
         base_date = datetime(2026, 1, 1)
-        dates = [(base_date.replace(day=1+i)).strftime("%Y-%m-%d") for i in range(min(n_days, 28))]
+        dates = [
+            (base_date.replace(day=1 + i)).strftime("%Y-%m-%d") for i in range(min(n_days, 28))
+        ]
         if n_days > 28:
-            dates = [f"2026-01-{str(i+1).zfill(2)}" for i in range(n_days)]
+            dates = [f"2026-01-{str(i + 1).zfill(2)}" for i in range(n_days)]
 
         return PriceData(
             dates=dates,
@@ -157,7 +150,7 @@ class TestPriceDataFetcher:
             highs=[102.0 + i * 0.1 for i in range(n_days)],
             lows=[99.0 + i * 0.1 for i in range(n_days)],
             closes=[101.0 + i * 0.1 for i in range(n_days)],
-            volumes=[1000000 + i * 1000 for i in range(n_days)]
+            volumes=[1000000 + i * 1000 for i in range(n_days)],
         )
 
     def test_fetcher_initialization(self):
@@ -304,6 +297,7 @@ class TestAlphaVantagePriceDataFetcher:
     def create_mock_client(self):
         """Create a mock AlphaVantageClient."""
         from src.alphavantage_client import AlphaVantageClient
+
         client = Mock(spec=AlphaVantageClient)
         client.config = Mock()
         client.config.base_url = "https://www.alphavantage.co/query"
@@ -314,7 +308,7 @@ class TestAlphaVantagePriceDataFetcher:
 
     def create_mock_price_data(self, n_days=60):
         """Create mock PriceData."""
-        dates = [f"2026-01-{str(i+1).zfill(2)}" for i in range(n_days)]
+        dates = [f"2026-01-{str(i + 1).zfill(2)}" for i in range(n_days)]
         return PriceData(
             dates=dates,
             opens=[100.0 + i * 0.1 for i in range(n_days)],
@@ -324,7 +318,7 @@ class TestAlphaVantagePriceDataFetcher:
             volumes=[1000000 + i * 1000 for i in range(n_days)],
             adjusted_closes=None,
             dividends=None,
-            split_coefficients=None
+            split_coefficients=None,
         )
 
     def test_fetcher_initialization_with_client(self):
@@ -372,7 +366,7 @@ class TestAlphaVantagePriceDataFetcher:
             "calls_today": 5,
             "daily_limit": 25,
             "remaining": 20,
-            "percentage_used": 20.0
+            "percentage_used": 20.0,
         }
 
         fetcher = AlphaVantagePriceDataFetcher(client)

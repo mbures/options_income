@@ -38,10 +38,10 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
-from typing import Optional, List, Dict, Any
+from typing import Any, Optional
 
 from .models import OptionContract, OptionsChain
-from .strike_optimizer import StrikeOptimizer, StrikeProfile, ProbabilityResult
+from .strike_optimizer import StrikeOptimizer, StrikeProfile
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +60,9 @@ class WheelState(Enum):
     - CASH: No shares owned, sell cash-secured puts to potentially acquire
     - SHARES: Shares owned (from assignment), sell covered calls to exit or collect premium
     """
-    CASH = "cash"       # Ready to sell puts
-    SHARES = "shares"   # Ready to sell calls
+
+    CASH = "cash"  # Ready to sell puts
+    SHARES = "shares"  # Ready to sell calls
 
 
 @dataclass
@@ -88,6 +89,7 @@ class CoveredCallResult:
         profile: Risk profile this strike fits
         warnings: List of warning messages
     """
+
     contract: OptionContract
     current_price: float
     shares: int
@@ -104,9 +106,9 @@ class CoveredCallResult:
     annualized_return_if_called: float
     sigma_distance: Optional[float]
     profile: Optional[StrikeProfile]
-    warnings: List[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "strike": self.contract.strike,
@@ -120,7 +122,9 @@ class CoveredCallResult:
             "breakeven": round(self.breakeven, 4),
             "profit_if_flat": round(self.profit_if_flat, 2),
             "profit_if_flat_pct": round(self.profit_if_flat_pct, 2),
-            "assignment_probability_pct": round(self.assignment_probability * 100, 2) if self.assignment_probability else None,
+            "assignment_probability_pct": round(self.assignment_probability * 100, 2)
+            if self.assignment_probability
+            else None,
             "days_to_expiry": self.days_to_expiry,
             "annualized_return_if_flat_pct": round(self.annualized_return_if_flat * 100, 2),
             "annualized_return_if_called_pct": round(self.annualized_return_if_called * 100, 2),
@@ -156,6 +160,7 @@ class CoveredPutResult:
         profile: Risk profile this strike fits
         warnings: List of warning messages
     """
+
     contract: OptionContract
     current_price: float
     premium_per_share: float
@@ -174,9 +179,9 @@ class CoveredPutResult:
     annualized_return_if_otm: float
     sigma_distance: Optional[float]
     profile: Optional[StrikeProfile]
-    warnings: List[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "strike": self.contract.strike,
@@ -193,7 +198,9 @@ class CoveredPutResult:
             "breakeven": round(self.breakeven, 4),
             "profit_if_flat": round(self.profit_if_flat, 2),
             "profit_if_flat_pct": round(self.profit_if_flat_pct, 2),
-            "assignment_probability_pct": round(self.assignment_probability * 100, 2) if self.assignment_probability else None,
+            "assignment_probability_pct": round(self.assignment_probability * 100, 2)
+            if self.assignment_probability
+            else None,
             "days_to_expiry": self.days_to_expiry,
             "annualized_return_if_otm_pct": round(self.annualized_return_if_otm * 100, 2),
             "sigma_distance": round(self.sigma_distance, 2) if self.sigma_distance else None,
@@ -213,12 +220,13 @@ class WheelRecommendation:
         analysis: The analysis result (CoveredCallResult or CoveredPutResult)
         rationale: Explanation of the recommendation
     """
+
     state: WheelState
     action: str
     analysis: Any  # CoveredCallResult or CoveredPutResult
     rationale: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "state": self.state.value,
@@ -243,6 +251,7 @@ class WheelCycleMetrics:
         net_profit: Total profit/loss for the cycle
         cycle_complete: Whether the cycle is complete (shares sold)
     """
+
     total_premium_collected: float = 0.0
     num_put_cycles: int = 0
     num_call_cycles: int = 0
@@ -252,15 +261,21 @@ class WheelCycleMetrics:
     net_profit: Optional[float] = None
     cycle_complete: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "total_premium_collected": round(self.total_premium_collected, 2),
             "num_put_cycles": self.num_put_cycles,
             "num_call_cycles": self.num_call_cycles,
-            "shares_acquired_price": round(self.shares_acquired_price, 4) if self.shares_acquired_price else None,
-            "shares_sold_price": round(self.shares_sold_price, 4) if self.shares_sold_price else None,
-            "average_cost_basis": round(self.average_cost_basis, 4) if self.average_cost_basis else None,
+            "shares_acquired_price": round(self.shares_acquired_price, 4)
+            if self.shares_acquired_price
+            else None,
+            "shares_sold_price": round(self.shares_sold_price, 4)
+            if self.shares_sold_price
+            else None,
+            "average_cost_basis": round(self.average_cost_basis, 4)
+            if self.average_cost_basis
+            else None,
             "net_profit": round(self.net_profit, 2) if self.net_profit else None,
             "cycle_complete": self.cycle_complete,
         }
@@ -305,7 +320,7 @@ class CoveredCallAnalyzer:
         volatility: float,
         shares: int = 100,
         cost_basis: Optional[float] = None,
-        earnings_dates: Optional[List[str]] = None
+        earnings_dates: Optional[list[str]] = None,
     ) -> CoveredCallResult:
         """
         Analyze a covered call position.
@@ -328,7 +343,9 @@ class CoveredCallAnalyzer:
         if not contract.is_call:
             raise ValueError("Contract must be a call option")
         if contract.strike <= current_price:
-            raise ValueError(f"Call strike ({contract.strike}) must be above current price ({current_price})")
+            raise ValueError(
+                f"Call strike ({contract.strike}) must be above current price ({current_price})"
+            )
 
         # Use current price as cost basis if not provided
         if cost_basis is None:
@@ -381,7 +398,7 @@ class CoveredCallAnalyzer:
                 current_price=current_price,
                 volatility=volatility,
                 days_to_expiry=max(1, days_to_expiry),
-                option_type="call"
+                option_type="call",
             )
 
             prob_result = self.optimizer.calculate_assignment_probability(
@@ -389,7 +406,7 @@ class CoveredCallAnalyzer:
                 current_price=current_price,
                 volatility=volatility,
                 days_to_expiry=max(1, days_to_expiry),
-                option_type="call"
+                option_type="call",
             )
             assignment_prob = prob_result.probability
 
@@ -406,7 +423,7 @@ class CoveredCallAnalyzer:
 
         logger.info(
             f"Analyzed covered call: {contract.strike} strike, "
-            f"${premium_per_share:.2f} premium, {assignment_prob*100 if assignment_prob else 0:.1f}% P(ITM)"
+            f"${premium_per_share:.2f} premium, {assignment_prob * 100 if assignment_prob else 0:.1f}% P(ITM)"
         )
 
         return CoveredCallResult(
@@ -439,8 +456,8 @@ class CoveredCallAnalyzer:
         expiration_date: Optional[str] = None,
         profile: Optional[StrikeProfile] = None,
         min_premium: float = 0.05,
-        limit: int = 5
-    ) -> List[CoveredCallResult]:
+        limit: int = 5,
+    ) -> list[CoveredCallResult]:
         """
         Get ranked covered call recommendations.
 
@@ -465,7 +482,7 @@ class CoveredCallAnalyzer:
             calls = [c for c in calls if c.expiration_date == expiration_date]
         else:
             # Use nearest expiration
-            expirations = sorted(set(c.expiration_date for c in calls))
+            expirations = sorted({c.expiration_date for c in calls})
             if expirations:
                 expiration_date = expirations[0]
                 calls = [c for c in calls if c.expiration_date == expiration_date]
@@ -490,7 +507,7 @@ class CoveredCallAnalyzer:
                     current_price=current_price,
                     volatility=volatility,
                     shares=shares,
-                    cost_basis=cost_basis
+                    cost_basis=cost_basis,
                 )
 
                 # Filter by profile if specified
@@ -524,7 +541,7 @@ class CoveredCallAnalyzer:
         except (ValueError, TypeError):
             return 30  # Default fallback
 
-    def _add_liquidity_warnings(self, contract: OptionContract, warnings: List[str]) -> None:
+    def _add_liquidity_warnings(self, contract: OptionContract, warnings: list[str]) -> None:
         """Add warnings for liquidity issues."""
         if contract.open_interest is not None and contract.open_interest < MIN_OPEN_INTEREST:
             warnings.append(f"Low open interest: {contract.open_interest}")
@@ -540,10 +557,7 @@ class CoveredCallAnalyzer:
             warnings.append("No bid price available")
 
     def _check_earnings_warning(
-        self,
-        expiration_date: str,
-        earnings_dates: List[str],
-        warnings: List[str]
+        self, expiration_date: str, earnings_dates: list[str], warnings: list[str]
     ) -> None:
         """Check if expiration spans an earnings date."""
         try:
@@ -595,8 +609,8 @@ class CoveredPutAnalyzer:
         contract: OptionContract,
         current_price: float,
         volatility: float,
-        earnings_dates: Optional[List[str]] = None,
-        ex_dividend_dates: Optional[List[str]] = None
+        earnings_dates: Optional[list[str]] = None,
+        ex_dividend_dates: Optional[list[str]] = None,
     ) -> CoveredPutResult:
         """
         Analyze a cash-secured put position.
@@ -618,7 +632,9 @@ class CoveredPutAnalyzer:
         if not contract.is_put:
             raise ValueError("Contract must be a put option")
         if contract.strike >= current_price:
-            raise ValueError(f"Put strike ({contract.strike}) must be below current price ({current_price})")
+            raise ValueError(
+                f"Put strike ({contract.strike}) must be below current price ({current_price})"
+            )
 
         warnings = []
 
@@ -658,7 +674,9 @@ class CoveredPutAnalyzer:
 
         # Profit if flat (stock unchanged): premium (put expires worthless)
         profit_if_flat = total_premium
-        profit_if_flat_pct = (profit_if_flat / collateral_required) * 100 if collateral_required > 0 else 0
+        profit_if_flat_pct = (
+            (profit_if_flat / collateral_required) * 100 if collateral_required > 0 else 0
+        )
 
         # Annualized return if OTM
         if days_to_expiry > 0:
@@ -677,7 +695,7 @@ class CoveredPutAnalyzer:
                 current_price=current_price,
                 volatility=volatility,
                 days_to_expiry=max(1, days_to_expiry),
-                option_type="put"
+                option_type="put",
             )
 
             prob_result = self.optimizer.calculate_assignment_probability(
@@ -685,7 +703,7 @@ class CoveredPutAnalyzer:
                 current_price=current_price,
                 volatility=volatility,
                 days_to_expiry=max(1, days_to_expiry),
-                option_type="put"
+                option_type="put",
             )
             assignment_prob = prob_result.probability
 
@@ -702,13 +720,11 @@ class CoveredPutAnalyzer:
 
         # Check for ex-dividend and early assignment risk
         if ex_dividend_dates:
-            self._check_early_assignment_risk(
-                contract, current_price, ex_dividend_dates, warnings
-            )
+            self._check_early_assignment_risk(contract, current_price, ex_dividend_dates, warnings)
 
         logger.info(
             f"Analyzed cash-secured put: {contract.strike} strike, "
-            f"${premium_per_share:.2f} premium, {assignment_prob*100 if assignment_prob else 0:.1f}% P(ITM)"
+            f"${premium_per_share:.2f} premium, {assignment_prob * 100 if assignment_prob else 0:.1f}% P(ITM)"
         )
 
         return CoveredPutResult(
@@ -742,8 +758,8 @@ class CoveredPutAnalyzer:
         profile: Optional[StrikeProfile] = None,
         target_purchase_price: Optional[float] = None,
         min_premium: float = 0.05,
-        limit: int = 5
-    ) -> List[CoveredPutResult]:
+        limit: int = 5,
+    ) -> list[CoveredPutResult]:
         """
         Get ranked cash-secured put recommendations.
 
@@ -767,7 +783,7 @@ class CoveredPutAnalyzer:
             puts = [c for c in puts if c.expiration_date == expiration_date]
         else:
             # Use nearest expiration
-            expirations = sorted(set(c.expiration_date for c in puts))
+            expirations = sorted({c.expiration_date for c in puts})
             if expirations:
                 expiration_date = expirations[0]
                 puts = [c for c in puts if c.expiration_date == expiration_date]
@@ -788,9 +804,7 @@ class CoveredPutAnalyzer:
 
             try:
                 result = self.analyze(
-                    contract=contract,
-                    current_price=current_price,
-                    volatility=volatility
+                    contract=contract, current_price=current_price, volatility=volatility
                 )
 
                 # Filter by profile if specified
@@ -798,7 +812,10 @@ class CoveredPutAnalyzer:
                     continue
 
                 # Filter by target purchase price if specified
-                if target_purchase_price and result.effective_purchase_price > target_purchase_price:
+                if (
+                    target_purchase_price
+                    and result.effective_purchase_price > target_purchase_price
+                ):
                     continue
 
                 results.append(result)
@@ -828,7 +845,7 @@ class CoveredPutAnalyzer:
         except (ValueError, TypeError):
             return 30  # Default fallback
 
-    def _add_liquidity_warnings(self, contract: OptionContract, warnings: List[str]) -> None:
+    def _add_liquidity_warnings(self, contract: OptionContract, warnings: list[str]) -> None:
         """Add warnings for liquidity issues."""
         if contract.open_interest is not None and contract.open_interest < MIN_OPEN_INTEREST:
             warnings.append(f"Low open interest: {contract.open_interest}")
@@ -844,10 +861,7 @@ class CoveredPutAnalyzer:
             warnings.append("No bid price available")
 
     def _check_earnings_warning(
-        self,
-        expiration_date: str,
-        earnings_dates: List[str],
-        warnings: List[str]
+        self, expiration_date: str, earnings_dates: list[str], warnings: list[str]
     ) -> None:
         """Check if expiration spans an earnings date."""
         try:
@@ -866,8 +880,8 @@ class CoveredPutAnalyzer:
         self,
         contract: OptionContract,
         current_price: float,
-        ex_dividend_dates: List[str],
-        warnings: List[str]
+        ex_dividend_dates: list[str],
+        warnings: list[str],
     ) -> None:
         """
         Check for early assignment risk on deep ITM puts near ex-dividend.
@@ -922,11 +936,7 @@ class WheelStrategy:
         )
     """
 
-    def __init__(
-        self,
-        call_analyzer: CoveredCallAnalyzer,
-        put_analyzer: CoveredPutAnalyzer
-    ):
+    def __init__(self, call_analyzer: CoveredCallAnalyzer, put_analyzer: CoveredPutAnalyzer):
         """
         Initialize the wheel strategy manager.
 
@@ -946,7 +956,7 @@ class WheelStrategy:
         shares: int = 100,
         cost_basis: Optional[float] = None,
         expiration_date: Optional[str] = None,
-        profile: Optional[StrikeProfile] = None
+        profile: Optional[StrikeProfile] = None,
     ) -> Optional[WheelRecommendation]:
         """
         Get a recommendation based on current wheel state.
@@ -971,7 +981,7 @@ class WheelStrategy:
                 current_price=current_price,
                 volatility=volatility,
                 expiration_date=expiration_date,
-                profile=profile
+                profile=profile,
             )
         else:
             # Holding shares - recommend selling a call
@@ -982,7 +992,7 @@ class WheelStrategy:
                 shares=shares,
                 cost_basis=cost_basis,
                 expiration_date=expiration_date,
-                profile=profile
+                profile=profile,
             )
 
     def _recommend_put(
@@ -991,7 +1001,7 @@ class WheelStrategy:
         current_price: float,
         volatility: float,
         expiration_date: Optional[str],
-        profile: Optional[StrikeProfile]
+        profile: Optional[StrikeProfile],
     ) -> Optional[WheelRecommendation]:
         """Generate put recommendation for CASH state."""
         recommendations = self.put_analyzer.get_recommendations(
@@ -1000,7 +1010,7 @@ class WheelStrategy:
             volatility=volatility,
             expiration_date=expiration_date,
             profile=profile or StrikeProfile.MODERATE,
-            limit=1
+            limit=1,
         )
 
         if not recommendations:
@@ -1010,16 +1020,13 @@ class WheelStrategy:
         rationale = (
             f"Sell {best.contract.strike} put for ${best.premium_per_share:.2f} premium. "
             f"If assigned, acquire shares at ${best.effective_purchase_price:.2f} "
-            f"({best.discount_from_current*100:.1f}% below current). "
+            f"({best.discount_from_current * 100:.1f}% below current). "
             f"If OTM, keep ${best.total_premium:.2f} premium "
-            f"({best.annualized_return_if_otm*100:.1f}% annualized)."
+            f"({best.annualized_return_if_otm * 100:.1f}% annualized)."
         )
 
         return WheelRecommendation(
-            state=WheelState.CASH,
-            action="sell_put",
-            analysis=best,
-            rationale=rationale
+            state=WheelState.CASH, action="sell_put", analysis=best, rationale=rationale
         )
 
     def _recommend_call(
@@ -1030,7 +1037,7 @@ class WheelStrategy:
         shares: int,
         cost_basis: Optional[float],
         expiration_date: Optional[str],
-        profile: Optional[StrikeProfile]
+        profile: Optional[StrikeProfile],
     ) -> Optional[WheelRecommendation]:
         """Generate call recommendation for SHARES state."""
         recommendations = self.call_analyzer.get_recommendations(
@@ -1041,7 +1048,7 @@ class WheelStrategy:
             cost_basis=cost_basis,
             expiration_date=expiration_date,
             profile=profile or StrikeProfile.MODERATE,
-            limit=1
+            limit=1,
         )
 
         if not recommendations:
@@ -1052,23 +1059,20 @@ class WheelStrategy:
             f"Sell {best.contract.strike} call for ${best.premium_per_share:.2f} premium. "
             f"If called away, profit ${best.max_profit:.2f} ({best.max_profit_pct:.1f}%). "
             f"If OTM, keep ${best.total_premium:.2f} premium "
-            f"({best.annualized_return_if_flat*100:.1f}% annualized)."
+            f"({best.annualized_return_if_flat * 100:.1f}% annualized)."
         )
 
         return WheelRecommendation(
-            state=WheelState.SHARES,
-            action="sell_call",
-            analysis=best,
-            rationale=rationale
+            state=WheelState.SHARES, action="sell_call", analysis=best, rationale=rationale
         )
 
     def calculate_cycle_metrics(
         self,
-        premiums_collected: List[float],
+        premiums_collected: list[float],
         acquisition_price: Optional[float] = None,
         sale_price: Optional[float] = None,
         num_puts: int = 0,
-        num_calls: int = 0
+        num_calls: int = 0,
     ) -> WheelCycleMetrics:
         """
         Calculate metrics for a wheel cycle.

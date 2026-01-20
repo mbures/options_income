@@ -294,8 +294,7 @@ finnhub-options/
 ├── requirements.txt          # Production dependencies
 ├── requirements-dev.txt      # Development dependencies
 ├── pytest.ini               # Test configuration
-├── pyproject.toml           # Black, MyPy configuration
-├── .pylintrc                # Linting rules
+├── pyproject.toml           # Ruff and MyPy configuration
 ├── .gitignore              # Git ignore rules
 │
 ├── README.md                # Comprehensive user guide
@@ -397,7 +396,7 @@ finnhub-options/
 **Lines of Code**: ~1,200 (including tests)
 **Documentation**: 4 major documents
 **Test Coverage**: 98% (core modules)
-**Code Quality**: 9.31/10 (pylint)
+**Code Quality**: Passes ruff linting
 **Development Time**: Professional full-stack solution
 
 **File Counts**:

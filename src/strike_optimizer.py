@@ -28,9 +28,9 @@ import logging
 import math
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, List, Dict, Any
+from typing import Any, Optional
 
-from .models import OptionsChain, OptionContract
+from .models import OptionContract, OptionsChain
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +52,15 @@ class StrikeProfile(Enum):
     - Consistent sigma distance (volatility-adjusted distance from price)
     - Consistent P(ITM) (which requires adjusting sigma based on DTE)
     """
-    AGGRESSIVE = "aggressive"       # 0.5-1.0σ, ~30-40% P(ITM) at 30 DTE
-    MODERATE = "moderate"           # 1.0-1.5σ, ~15-30% P(ITM) at 30 DTE
-    CONSERVATIVE = "conservative"   # 1.5-2.0σ, ~7-15% P(ITM) at 30 DTE
-    DEFENSIVE = "defensive"         # 2.0-2.5σ, ~2-7% P(ITM) at 30 DTE
+
+    AGGRESSIVE = "aggressive"  # 0.5-1.0σ, ~30-40% P(ITM) at 30 DTE
+    MODERATE = "moderate"  # 1.0-1.5σ, ~15-30% P(ITM) at 30 DTE
+    CONSERVATIVE = "conservative"  # 1.5-2.0σ, ~7-15% P(ITM) at 30 DTE
+    DEFENSIVE = "defensive"  # 2.0-2.5σ, ~2-7% P(ITM) at 30 DTE
 
 
 # Sigma ranges for each profile (min_sigma, max_sigma)
-PROFILE_SIGMA_RANGES: Dict[StrikeProfile, tuple] = {
+PROFILE_SIGMA_RANGES: dict[StrikeProfile, tuple] = {
     StrikeProfile.AGGRESSIVE: (0.5, 1.0),
     StrikeProfile.MODERATE: (1.0, 1.5),
     StrikeProfile.CONSERVATIVE: (1.5, 2.0),
@@ -82,6 +83,7 @@ class StrikeResult:
         option_type: "call" or "put"
         assignment_probability: Estimated probability of ITM at expiry
     """
+
     theoretical_strike: float
     tradeable_strike: float
     sigma: float
@@ -91,7 +93,7 @@ class StrikeResult:
     option_type: str
     assignment_probability: Optional[float] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "theoretical_strike": round(self.theoretical_strike, 4),
@@ -102,8 +104,12 @@ class StrikeResult:
             "volatility_pct": round(self.volatility * 100, 2),
             "days_to_expiry": self.days_to_expiry,
             "option_type": self.option_type,
-            "assignment_probability": round(self.assignment_probability, 4) if self.assignment_probability else None,
-            "assignment_probability_pct": round(self.assignment_probability * 100, 2) if self.assignment_probability else None,
+            "assignment_probability": round(self.assignment_probability, 4)
+            if self.assignment_probability
+            else None,
+            "assignment_probability_pct": round(self.assignment_probability * 100, 2)
+            if self.assignment_probability
+            else None,
         }
 
 
@@ -124,6 +130,7 @@ class ProbabilityResult:
         risk_free_rate: Risk-free interest rate used
         option_type: "call" or "put"
     """
+
     probability: float
     d1: float
     d2: float
@@ -135,7 +142,7 @@ class ProbabilityResult:
     risk_free_rate: float
     option_type: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "probability": round(self.probability, 4),
@@ -174,6 +181,7 @@ class StrikeRecommendation:
         profile: StrikeProfile this recommendation fits
         warnings: List of warning messages
     """
+
     contract: Optional[OptionContract]
     strike: float
     expiration_date: str
@@ -188,9 +196,9 @@ class StrikeRecommendation:
     volume: Optional[int] = None
     implied_volatility: Optional[float] = None
     profile: Optional[StrikeProfile] = None
-    warnings: List[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "strike": self.strike,
@@ -201,10 +209,14 @@ class StrikeRecommendation:
             "bid": self.bid,
             "ask": self.ask,
             "mid_price": round(self.mid_price, 4) if self.mid_price else None,
-            "bid_ask_spread_pct": round(self.bid_ask_spread_pct, 2) if self.bid_ask_spread_pct else None,
+            "bid_ask_spread_pct": round(self.bid_ask_spread_pct, 2)
+            if self.bid_ask_spread_pct
+            else None,
             "open_interest": self.open_interest,
             "volume": self.volume,
-            "implied_volatility_pct": round(self.implied_volatility * 100, 2) if self.implied_volatility else None,
+            "implied_volatility_pct": round(self.implied_volatility * 100, 2)
+            if self.implied_volatility
+            else None,
             "profile": self.profile.value if self.profile else None,
             "warnings": self.warnings,
         }
@@ -224,9 +236,10 @@ class ProfileStrikesResult:
         collapsed_profiles: List of profile pairs that map to the same tradeable strike
         is_short_dte: Whether DTE is considered short (<14 days)
     """
-    strikes: Dict[StrikeProfile, "StrikeResult"]
-    warnings: List[str] = field(default_factory=list)
-    collapsed_profiles: List[tuple] = field(default_factory=list)
+
+    strikes: dict[StrikeProfile, "StrikeResult"]
+    warnings: list[str] = field(default_factory=list)
+    collapsed_profiles: list[tuple] = field(default_factory=list)
     is_short_dte: bool = False
 
     def __getitem__(self, profile: StrikeProfile) -> "StrikeResult":
@@ -241,7 +254,7 @@ class ProfileStrikesResult:
         """Allow dict-like items() for backward compatibility."""
         return self.strikes.items()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "strikes": {p.value: r.to_dict() for p, r in self.strikes.items()},
@@ -284,11 +297,11 @@ class StrikeOptimizer:
 
     # Common strike increments by price range
     STRIKE_INCREMENTS = {
-        (0, 5): 0.50,       # Stocks under $5: $0.50 increments
-        (5, 25): 0.50,      # $5-$25: $0.50 increments
-        (25, 200): 1.00,    # $25-$200: $1.00 increments
-        (200, 500): 2.50,   # $200-$500: $2.50 increments
-        (500, float('inf')): 5.00,  # Above $500: $5.00 increments
+        (0, 5): 0.50,  # Stocks under $5: $0.50 increments
+        (5, 25): 0.50,  # $5-$25: $0.50 increments
+        (25, 200): 1.00,  # $25-$200: $1.00 increments
+        (200, 500): 2.50,  # $200-$500: $2.50 increments
+        (500, float("inf")): 5.00,  # Above $500: $5.00 increments
     }
 
     # Default risk-free rate (approximate current rate)
@@ -314,7 +327,7 @@ class StrikeOptimizer:
         days_to_expiry: int,
         sigma: float,
         option_type: str = "call",
-        round_strike: bool = True
+        round_strike: bool = True,
     ) -> StrikeResult:
         """
         Calculate the strike price at N standard deviations from current price.
@@ -367,9 +380,7 @@ class StrikeOptimizer:
         # Round to tradeable strike if requested
         if round_strike:
             tradeable_strike = self.round_to_tradeable_strike(
-                theoretical_strike,
-                current_price,
-                option_type
+                theoretical_strike, current_price, option_type
             )
         else:
             tradeable_strike = theoretical_strike
@@ -380,13 +391,13 @@ class StrikeOptimizer:
             current_price=current_price,
             volatility=volatility,
             days_to_expiry=days_to_expiry,
-            option_type=option_type
+            option_type=option_type,
         )
 
         logger.info(
             f"Calculated {sigma}σ {option_type} strike: "
             f"theoretical=${theoretical_strike:.2f}, tradeable=${tradeable_strike:.2f}, "
-            f"P(ITM)={prob_result.probability*100:.1f}%"
+            f"P(ITM)={prob_result.probability * 100:.1f}%"
         )
 
         return StrikeResult(
@@ -397,7 +408,7 @@ class StrikeOptimizer:
             volatility=volatility,
             days_to_expiry=days_to_expiry,
             option_type=option_type,
-            assignment_probability=prob_result.probability
+            assignment_probability=prob_result.probability,
         )
 
     def round_to_tradeable_strike(
@@ -405,7 +416,7 @@ class StrikeOptimizer:
         strike: float,
         current_price: float,
         option_type: str,
-        available_strikes: Optional[List[float]] = None
+        available_strikes: Optional[list[float]] = None,
     ) -> float:
         """
         Round a theoretical strike to a tradeable strike price.
@@ -475,7 +486,7 @@ class StrikeOptimizer:
         current_price: float,
         volatility: float,
         days_to_expiry: int,
-        option_type: str = "call"
+        option_type: str = "call",
     ) -> ProbabilityResult:
         """
         Calculate the probability of an option being ITM at expiration.
@@ -520,16 +531,18 @@ class StrikeOptimizer:
         T = days_to_expiry / 365.0
 
         # Calculate d1 and d2
-        d1 = (math.log(current_price / strike) + (self.risk_free_rate + 0.5 * volatility ** 2) * T) / (volatility * math.sqrt(T))
+        d1 = (
+            math.log(current_price / strike) + (self.risk_free_rate + 0.5 * volatility**2) * T
+        ) / (volatility * math.sqrt(T))
         d2 = d1 - volatility * math.sqrt(T)
 
         # Calculate probability and delta
         if option_type == "call":
             probability = self._norm_cdf(d2)  # N(d2) for calls
-            delta = self._norm_cdf(d1)        # Delta = N(d1) for calls
+            delta = self._norm_cdf(d1)  # Delta = N(d1) for calls
         else:
             probability = self._norm_cdf(-d2)  # N(-d2) for puts
-            delta = self._norm_cdf(d1) - 1     # Delta = N(d1) - 1 for puts
+            delta = self._norm_cdf(d1) - 1  # Delta = N(d1) - 1 for puts
 
         return ProbabilityResult(
             probability=probability,
@@ -541,7 +554,7 @@ class StrikeOptimizer:
             volatility=volatility,
             time_to_expiry=T,
             risk_free_rate=self.risk_free_rate,
-            option_type=option_type
+            option_type=option_type,
         )
 
     @staticmethod
@@ -565,7 +578,7 @@ class StrikeOptimizer:
         current_price: float,
         volatility: float,
         days_to_expiry: int,
-        option_type: str = "call"
+        option_type: str = "call",
     ) -> float:
         """
         Calculate how many sigmas a strike is from the current price.
@@ -629,8 +642,8 @@ class StrikeOptimizer:
         profile: Optional[StrikeProfile] = None,
         min_open_interest: Optional[int] = None,
         max_bid_ask_spread_pct: Optional[float] = None,
-        limit: int = 10
-    ) -> List[StrikeRecommendation]:
+        limit: int = 10,
+    ) -> list[StrikeRecommendation]:
         """
         Generate ranked strike recommendations based on criteria.
 
@@ -657,7 +670,11 @@ class StrikeOptimizer:
         """
         option_type = option_type.lower()
         min_oi = min_open_interest if min_open_interest is not None else self.MIN_OPEN_INTEREST
-        max_spread = max_bid_ask_spread_pct if max_bid_ask_spread_pct is not None else self.MAX_BID_ASK_SPREAD_PCT
+        max_spread = (
+            max_bid_ask_spread_pct
+            if max_bid_ask_spread_pct is not None
+            else self.MAX_BID_ASK_SPREAD_PCT
+        )
 
         # Get contracts of the right type
         if option_type == "call":
@@ -670,7 +687,7 @@ class StrikeOptimizer:
             contracts = [c for c in contracts if c.expiration_date == expiration_date]
         else:
             # Use nearest expiration
-            expirations = sorted(set(c.expiration_date for c in contracts))
+            expirations = sorted({c.expiration_date for c in contracts})
             if expirations:
                 expiration_date = expirations[0]
                 contracts = [c for c in contracts if c.expiration_date == expiration_date]
@@ -682,6 +699,7 @@ class StrikeOptimizer:
         # Calculate days to expiry (calendar days, not trading days)
         # This is the standard convention for options pricing (Black-Scholes, IV)
         from datetime import date
+
         try:
             exp_date_obj = date.fromisoformat(expiration_date)
             today = date.today()
@@ -705,7 +723,7 @@ class StrikeOptimizer:
                     current_price=current_price,
                     volatility=volatility,
                     days_to_expiry=days_to_expiry,
-                    option_type=option_type
+                    option_type=option_type,
                 )
             except (ValueError, ZeroDivisionError):
                 continue
@@ -722,7 +740,7 @@ class StrikeOptimizer:
                     current_price=current_price,
                     volatility=volatility,
                     days_to_expiry=days_to_expiry,
-                    option_type=option_type
+                    option_type=option_type,
                 )
                 assignment_prob = prob_result.probability
             except (ValueError, ZeroDivisionError):
@@ -767,7 +785,7 @@ class StrikeOptimizer:
                 volume=contract.volume,
                 implied_volatility=contract.implied_volatility,
                 profile=contract_profile,
-                warnings=warnings
+                warnings=warnings,
             )
             recommendations.append(rec)
 
@@ -778,13 +796,15 @@ class StrikeOptimizer:
             StrikeProfile.MODERATE: 1,
             StrikeProfile.AGGRESSIVE: 2,
             StrikeProfile.DEFENSIVE: 3,
-            None: 4
+            None: 4,
         }
 
-        recommendations.sort(key=lambda r: (
-            profile_priority.get(r.profile, 4),
-            abs(r.sigma_distance - 1.5)  # Prefer strikes near 1.5σ (moderate)
-        ))
+        recommendations.sort(
+            key=lambda r: (
+                profile_priority.get(r.profile, 4),
+                abs(r.sigma_distance - 1.5),  # Prefer strikes near 1.5σ (moderate)
+            )
+        )
 
         logger.info(
             f"Generated {len(recommendations[:limit])} strike recommendations "
@@ -798,7 +818,7 @@ class StrikeOptimizer:
         current_price: float,
         volatility: float,
         days_to_expiry: int,
-        option_type: str = "call"
+        option_type: str = "call",
     ) -> ProfileStrikesResult:
         """
         Calculate representative strikes for all risk profiles.
@@ -837,12 +857,12 @@ class StrikeOptimizer:
                 volatility=volatility,
                 days_to_expiry=days_to_expiry,
                 sigma=mid_sigma,
-                option_type=option_type
+                option_type=option_type,
             )
             strikes[profile] = result
 
         # Detect strike collisions (multiple profiles mapping to same tradeable strike)
-        strike_to_profiles: Dict[float, List[StrikeProfile]] = {}
+        strike_to_profiles: dict[float, list[StrikeProfile]] = {}
         for profile, result in strikes.items():
             strike = result.tradeable_strike
             if strike not in strike_to_profiles:
@@ -873,5 +893,5 @@ class StrikeOptimizer:
             strikes=strikes,
             warnings=warnings,
             collapsed_profiles=collapsed_profiles,
-            is_short_dte=is_short_dte
+            is_short_dte=is_short_dte,
         )

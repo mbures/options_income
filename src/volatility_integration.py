@@ -6,11 +6,11 @@ options chains and integrate with the volatility calculator.
 """
 
 import logging
-from typing import Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import Optional
 
-from .models import OptionsChain, OptionContract
-from .volatility import VolatilityCalculator, VolatilityResult, PriceData
+from .models import OptionsChain
+from .volatility import PriceData, VolatilityCalculator, VolatilityResult
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ def extract_atm_implied_volatility(
     options_chain: OptionsChain,
     current_price: float,
     expiration_date: Optional[str] = None,
-    option_type: str = "call"
+    option_type: str = "call",
 ) -> Optional[float]:
     """
     Extract ATM implied volatility from options chain.
@@ -35,8 +35,7 @@ def extract_atm_implied_volatility(
     """
     # Filter by type
     contracts = (
-        options_chain.get_calls() if option_type.lower() == "call"
-        else options_chain.get_puts()
+        options_chain.get_calls() if option_type.lower() == "call" else options_chain.get_puts()
     )
 
     # Filter by expiration if specified
@@ -57,7 +56,7 @@ def extract_atm_implied_volatility(
         return None
 
     logger.info(
-        f"Extracted ATM IV: {iv:.4f} ({iv*100:.2f}%) "
+        f"Extracted ATM IV: {iv:.4f} ({iv * 100:.2f}%) "
         f"from strike ${atm_contract.strike} (price: ${current_price})"
     )
 
@@ -89,7 +88,7 @@ def calculate_volatility_with_iv(
     options_chain: OptionsChain,
     current_price: float,
     method: str = "blended",
-    expiration_date: Optional[str] = None
+    expiration_date: Optional[str] = None,
 ) -> VolatilityResult:
     """
     Calculate volatility combining historical prices and implied volatility.
@@ -116,34 +115,25 @@ def calculate_volatility_with_iv(
         iv = extract_atm_implied_volatility(
             options_chain=options_chain,
             current_price=current_price,
-            expiration_date=expiration_date
+            expiration_date=expiration_date,
         )
 
         if iv is None:
             logger.warning("Could not extract IV, falling back to close-to-close")
             return calculator.calculate_from_price_data(
-                price_data=price_data,
-                method="close_to_close"
+                price_data=price_data, method="close_to_close"
             )
 
         # Calculate blended volatility
-        return calculator.calculate_blended(
-            price_data=price_data,
-            implied_volatility=iv
-        )
+        return calculator.calculate_blended(price_data=price_data, implied_volatility=iv)
     else:
         # Calculate using specified historical method
-        return calculator.calculate_from_price_data(
-            price_data=price_data,
-            method=method
-        )
+        return calculator.calculate_from_price_data(price_data=price_data, method=method)
 
 
 def calculate_iv_term_structure(
-    options_chain: OptionsChain,
-    current_price: float,
-    num_expirations: int = 4
-) -> List[dict]:
+    options_chain: OptionsChain, current_price: float, num_expirations: int = 4
+) -> list[dict]:
     """
     Calculate implied volatility term structure.
 
@@ -160,9 +150,7 @@ def calculate_iv_term_structure(
 
     for exp_date in expirations:
         iv = extract_atm_implied_volatility(
-            options_chain=options_chain,
-            current_price=current_price,
-            expiration_date=exp_date
+            options_chain=options_chain, current_price=current_price, expiration_date=exp_date
         )
 
         if iv:
@@ -171,15 +159,17 @@ def calculate_iv_term_structure(
                 exp = datetime.fromisoformat(exp_date)
                 today = datetime.now()
                 dte = (exp - today).days
-            except:
+            except (ValueError, TypeError):
                 dte = None
 
-            term_structure.append({
-                "expiration_date": exp_date,
-                "days_to_expiry": dte,
-                "implied_volatility": iv,
-                "implied_volatility_pct": iv * 100
-            })
+            term_structure.append(
+                {
+                    "expiration_date": exp_date,
+                    "days_to_expiry": dte,
+                    "implied_volatility": iv,
+                    "implied_volatility_pct": iv * 100,
+                }
+            )
 
     return term_structure
 
@@ -206,9 +196,11 @@ def validate_price_data_quality(price_data: PriceData) -> dict:
     if price_data.dates:
         dates = [datetime.fromisoformat(d) for d in price_data.dates]
         for i in range(1, len(dates)):
-            gap = (dates[i] - dates[i-1]).days
+            gap = (dates[i] - dates[i - 1]).days
             if gap > 5:  # More than 5 days suggests missing data
-                warnings.append(f"Data gap detected: {gap} days between {dates[i-1]} and {dates[i]}")
+                warnings.append(
+                    f"Data gap detected: {gap} days between {dates[i - 1]} and {dates[i]}"
+                )
 
     # Check price quality
     if any(c <= 0 for c in price_data.closes):
@@ -216,10 +208,10 @@ def validate_price_data_quality(price_data: PriceData) -> dict:
 
     # Check for unrealistic returns (>50% in one day)
     for i in range(1, len(price_data.closes)):
-        ret = abs((price_data.closes[i] / price_data.closes[i-1]) - 1)
+        ret = abs((price_data.closes[i] / price_data.closes[i - 1]) - 1)
         if ret > 0.5:
             warnings.append(
-                f"Large price move detected: {ret*100:.1f}% "
+                f"Large price move detected: {ret * 100:.1f}% "
                 f"on {price_data.dates[i] if price_data.dates else f'day {i}'}"
             )
 
@@ -228,5 +220,5 @@ def validate_price_data_quality(price_data: PriceData) -> dict:
         "data_points": n_points,
         "issues": issues,
         "warnings": warnings,
-        "quality_score": max(0, 100 - len(issues) * 50 - len(warnings) * 10)
+        "quality_score": max(0, 100 - len(issues) * 50 - len(warnings) * 10),
     }

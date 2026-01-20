@@ -12,12 +12,10 @@ Mathematical References:
 - Yang-Zhang: Handles overnight gaps (8.0x more efficient)
 """
 
-import math
 import logging
+import math
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any, Union
-from datetime import datetime
-from enum import Enum
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +36,7 @@ class VolatilityConfig:
         annualization_factor: Trading days per year (default: 252)
         min_data_points: Minimum data points required (default: 10)
     """
+
     short_window: int = 20
     long_window: int = 60
     annualization_factor: float = 252.0
@@ -65,6 +64,7 @@ class BlendWeights:
         realized_long: Weight for long-term realized vol (default: 0.20)
         implied: Weight for implied volatility (default: 0.50)
     """
+
     realized_short: float = 0.30
     realized_long: float = 0.20
     implied: float = 0.50
@@ -94,6 +94,7 @@ class VolatilityResult:
         annualized: Whether result is annualized
         metadata: Additional information about calculation
     """
+
     volatility: float
     method: str
     window: int
@@ -101,9 +102,9 @@ class VolatilityResult:
     start_date: str
     end_date: str
     annualized: bool
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""
         return {
             "volatility": round(self.volatility, 4),
@@ -114,7 +115,7 @@ class VolatilityResult:
             "start_date": self.start_date,
             "end_date": self.end_date,
             "annualized": self.annualized,
-            "metadata": self.metadata
+            "metadata": self.metadata,
         }
 
 
@@ -134,15 +135,16 @@ class PriceData:
         dividends: Dividend amounts per day (0 if none) (optional)
         split_coefficients: Split ratios per day (1.0 if none) (optional)
     """
-    dates: List[str]
-    closes: List[float]
-    opens: Optional[List[float]] = None
-    highs: Optional[List[float]] = None
-    lows: Optional[List[float]] = None
-    volumes: Optional[List[int]] = None
-    adjusted_closes: Optional[List[float]] = None
-    dividends: Optional[List[float]] = None
-    split_coefficients: Optional[List[float]] = None
+
+    dates: list[str]
+    closes: list[float]
+    opens: Optional[list[float]] = None
+    highs: Optional[list[float]] = None
+    lows: Optional[list[float]] = None
+    volumes: Optional[list[int]] = None
+    adjusted_closes: Optional[list[float]] = None
+    dividends: Optional[list[float]] = None
+    split_coefficients: Optional[list[float]] = None
 
     def __post_init__(self) -> None:
         """Validate data consistency."""
@@ -203,10 +205,10 @@ class VolatilityCalculator:
 
     def calculate_close_to_close(
         self,
-        prices: List[float],
+        prices: list[float],
         window: Optional[int] = None,
         annualize: bool = True,
-        dates: Optional[List[str]] = None
+        dates: Optional[list[str]] = None,
     ) -> VolatilityResult:
         """
         Calculate close-to-close realized volatility.
@@ -238,7 +240,7 @@ class VolatilityCalculator:
         # Calculate log returns
         log_returns = []
         for i in range(1, len(prices_window)):
-            log_returns.append(math.log(prices_window[i] / prices_window[i-1]))
+            log_returns.append(math.log(prices_window[i] / prices_window[i - 1]))
 
         # Calculate mean return
         mean_return = sum(log_returns) / len(log_returns)
@@ -268,17 +270,17 @@ class VolatilityCalculator:
             metadata={
                 "returns_count": len(log_returns),
                 "mean_return": mean_return,
-                "efficiency_ratio": 1.0
-            }
+                "efficiency_ratio": 1.0,
+            },
         )
 
     def calculate_parkinson(
         self,
-        highs: List[float],
-        lows: List[float],
+        highs: list[float],
+        lows: list[float],
         window: Optional[int] = None,
         annualize: bool = True,
-        dates: Optional[List[str]] = None
+        dates: Optional[list[str]] = None,
     ) -> VolatilityResult:
         """
         Calculate Parkinson (high-low) volatility.
@@ -308,16 +310,18 @@ class VolatilityCalculator:
         lows_window = lows[-window:] if len(lows) > window else lows
 
         if len(highs_window) < self.config.min_data_points:
-            raise ValueError(f"Insufficient data: need at least {self.config.min_data_points} points")
+            raise ValueError(
+                f"Insufficient data: need at least {self.config.min_data_points} points"
+            )
 
         # Calculate Parkinson estimator
         sum_squared_log_hl = 0.0
-        for h, l in zip(highs_window, lows_window):
-            if h < l:
-                raise ValueError(f"High ({h}) < Low ({l})")
-            if l <= 0:
+        for high, low in zip(highs_window, lows_window):
+            if high < low:
+                raise ValueError(f"High ({high}) < Low ({low})")
+            if low <= 0:
                 raise ValueError("Prices must be positive")
-            sum_squared_log_hl += math.log(h / l) ** 2
+            sum_squared_log_hl += math.log(high / low) ** 2
 
         n = len(highs_window)
         variance = sum_squared_log_hl / (4 * n * math.log(2))
@@ -338,21 +342,18 @@ class VolatilityCalculator:
             start_date=start_date,
             end_date=end_date,
             annualized=annualize,
-            metadata={
-                "efficiency_ratio": 5.2,
-                "uses_intraday": True
-            }
+            metadata={"efficiency_ratio": 5.2, "uses_intraday": True},
         )
 
     def calculate_garman_klass(
         self,
-        opens: List[float],
-        highs: List[float],
-        lows: List[float],
-        closes: List[float],
+        opens: list[float],
+        highs: list[float],
+        lows: list[float],
+        closes: list[float],
         window: Optional[int] = None,
         annualize: bool = True,
-        dates: Optional[List[str]] = None
+        dates: Optional[list[str]] = None,
     ) -> VolatilityResult:
         """
         Calculate Garman-Klass volatility.
@@ -384,19 +385,21 @@ class VolatilityCalculator:
         closes_window = closes[-window:] if n > window else closes
 
         if len(closes_window) < self.config.min_data_points:
-            raise ValueError(f"Insufficient data: need at least {self.config.min_data_points} points")
+            raise ValueError(
+                f"Insufficient data: need at least {self.config.min_data_points} points"
+            )
 
         # Calculate Garman-Klass estimator
         sum_gk = 0.0
-        for o, h, l, c in zip(opens_window, highs_window, lows_window, closes_window):
-            if any(p <= 0 for p in [o, h, l, c]):
+        for open, high, low, close in zip(opens_window, highs_window, lows_window, closes_window):
+            if any(p <= 0 for p in [open, high, low, close]):
                 raise ValueError("All prices must be positive")
-            if h < l:
-                raise ValueError(f"High ({h}) < Low ({l})")
+            if high < low:
+                raise ValueError(f"High ({high}) < Low ({low})")
 
-            log_hl = math.log(h / l)
-            log_co = math.log(c / o)
-            sum_gk += 0.5 * log_hl ** 2 - (2 * math.log(2) - 1) * log_co ** 2
+            log_hl = math.log(high / low)
+            log_co = math.log(close / open)
+            sum_gk += 0.5 * log_hl**2 - (2 * math.log(2) - 1) * log_co**2
 
         n_points = len(closes_window)
         variance = sum_gk / n_points
@@ -417,21 +420,18 @@ class VolatilityCalculator:
             start_date=start_date,
             end_date=end_date,
             annualized=annualize,
-            metadata={
-                "efficiency_ratio": 7.4,
-                "uses_ohlc": True
-            }
+            metadata={"efficiency_ratio": 7.4, "uses_ohlc": True},
         )
 
     def calculate_yang_zhang(
         self,
-        opens: List[float],
-        highs: List[float],
-        lows: List[float],
-        closes: List[float],
+        opens: list[float],
+        highs: list[float],
+        lows: list[float],
+        closes: list[float],
         window: Optional[int] = None,
         annualize: bool = True,
-        dates: Optional[List[str]] = None
+        dates: Optional[list[str]] = None,
     ) -> VolatilityResult:
         """
         Calculate Yang-Zhang volatility.
@@ -465,14 +465,16 @@ class VolatilityCalculator:
         closes_window = closes[-window:] if n > window else closes
 
         if len(closes_window) < self.config.min_data_points:
-            raise ValueError(f"Insufficient data: need at least {self.config.min_data_points} points")
+            raise ValueError(
+                f"Insufficient data: need at least {self.config.min_data_points} points"
+            )
 
         n_points = len(closes_window)
 
         # Calculate overnight returns (close-to-open)
         overnight_returns = []
         for i in range(1, n_points):
-            overnight_returns.append(math.log(opens_window[i] / closes_window[i-1]))
+            overnight_returns.append(math.log(opens_window[i] / closes_window[i - 1]))
 
         # Calculate open-to-close returns
         oc_returns = []
@@ -481,11 +483,11 @@ class VolatilityCalculator:
 
         # Calculate Rogers-Satchell component
         rs_sum = 0.0
-        for o, h, l, c in zip(opens_window, highs_window, lows_window, closes_window):
-            log_ho = math.log(h / o)
-            log_lo = math.log(l / o)
-            log_hc = math.log(h / c)
-            log_lc = math.log(l / c)
+        for open, high, low, close in zip(opens_window, highs_window, lows_window, closes_window):
+            log_ho = math.log(high / open)
+            log_lo = math.log(low / open)
+            log_hc = math.log(high / close)
+            log_lc = math.log(low / close)
             rs_sum += log_ho * log_hc + log_lo * log_lc
 
         # Calculate variance components
@@ -524,15 +526,15 @@ class VolatilityCalculator:
                 "overnight_variance": sigma_o_sq,
                 "oc_variance": sigma_c_sq,
                 "rs_variance": sigma_rs_sq,
-                "k_parameter": k
-            }
+                "k_parameter": k,
+            },
         )
 
     def calculate_blended(
         self,
         price_data: PriceData,
         implied_volatility: float,
-        weights: Optional[BlendWeights] = None
+        weights: Optional[BlendWeights] = None,
     ) -> VolatilityResult:
         """
         Calculate blended volatility estimate.
@@ -555,7 +557,7 @@ class VolatilityCalculator:
             prices=price_data.closes,
             window=self.config.short_window,
             annualize=True,
-            dates=price_data.dates
+            dates=price_data.dates,
         )
 
         # Calculate long-term realized vol
@@ -563,14 +565,14 @@ class VolatilityCalculator:
             prices=price_data.closes,
             window=self.config.long_window,
             annualize=True,
-            dates=price_data.dates
+            dates=price_data.dates,
         )
 
         # Blend volatilities
         blended_vol = (
-            weights.realized_short * rv_short.volatility +
-            weights.realized_long * rv_long.volatility +
-            weights.implied * implied_volatility
+            weights.realized_short * rv_short.volatility
+            + weights.realized_long * rv_long.volatility
+            + weights.implied * implied_volatility
         )
 
         return VolatilityResult(
@@ -588,14 +590,14 @@ class VolatilityCalculator:
                 "weights": {
                     "realized_short": weights.realized_short,
                     "realized_long": weights.realized_long,
-                    "implied": weights.implied
+                    "implied": weights.implied,
                 },
                 "components": {
                     "rv_short_contribution": weights.realized_short * rv_short.volatility,
                     "rv_long_contribution": weights.realized_long * rv_long.volatility,
-                    "implied_contribution": weights.implied * implied_volatility
-                }
-            }
+                    "implied_contribution": weights.implied * implied_volatility,
+                },
+            },
         )
 
     def calculate_from_price_data(
@@ -603,7 +605,7 @@ class VolatilityCalculator:
         price_data: PriceData,
         method: str = "close_to_close",
         window: Optional[int] = None,
-        annualize: bool = True
+        annualize: bool = True,
     ) -> VolatilityResult:
         """
         Calculate volatility from PriceData object using specified method.
@@ -626,10 +628,7 @@ class VolatilityCalculator:
 
         if method == "close_to_close":
             return self.calculate_close_to_close(
-                prices=price_data.closes,
-                window=window,
-                annualize=annualize,
-                dates=price_data.dates
+                prices=price_data.closes, window=window, annualize=annualize, dates=price_data.dates
             )
 
         elif method == "parkinson":
@@ -640,7 +639,7 @@ class VolatilityCalculator:
                 lows=price_data.lows,
                 window=window,
                 annualize=annualize,
-                dates=price_data.dates
+                dates=price_data.dates,
             )
 
         elif method == "garman_klass":
@@ -653,7 +652,7 @@ class VolatilityCalculator:
                 closes=price_data.closes,
                 window=window,
                 annualize=annualize,
-                dates=price_data.dates
+                dates=price_data.dates,
             )
 
         elif method == "yang_zhang":
@@ -666,7 +665,7 @@ class VolatilityCalculator:
                 closes=price_data.closes,
                 window=window,
                 annualize=annualize,
-                dates=price_data.dates
+                dates=price_data.dates,
             )
 
         else:

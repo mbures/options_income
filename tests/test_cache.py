@@ -2,11 +2,12 @@
 
 import json
 import sqlite3
-import pytest
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from src.cache import LocalFileCache, CacheError
+import pytest
+
+from src.cache import CacheError, LocalFileCache
 
 
 class TestLocalFileCacheInit:
@@ -17,7 +18,7 @@ class TestLocalFileCacheInit:
         cache_dir = tmp_path / "test_cache"
         assert not cache_dir.exists()
 
-        cache = LocalFileCache(cache_dir=str(cache_dir))
+        LocalFileCache(cache_dir=str(cache_dir))
 
         assert cache_dir.exists()
         assert cache_dir.is_dir()
@@ -28,7 +29,7 @@ class TestLocalFileCacheInit:
         cache_dir.mkdir()
         (cache_dir / "existing_file.txt").write_text("test")
 
-        cache = LocalFileCache(cache_dir=str(cache_dir))
+        LocalFileCache(cache_dir=str(cache_dir))
 
         assert cache_dir.exists()
         assert (cache_dir / "existing_file.txt").exists()
@@ -41,14 +42,14 @@ class TestLocalFileCacheInit:
 
     def test_cache_creates_database(self, tmp_path):
         """Test that cache creates SQLite database."""
-        cache = LocalFileCache(cache_dir=str(tmp_path))
+        LocalFileCache(cache_dir=str(tmp_path))
 
         db_path = tmp_path / "cache.db"
         assert db_path.exists()
 
     def test_cache_creates_tables(self, tmp_path):
         """Test that cache creates required tables."""
-        cache = LocalFileCache(cache_dir=str(tmp_path))
+        LocalFileCache(cache_dir=str(tmp_path))
 
         # Check tables exist
         conn = sqlite3.connect(str(tmp_path / "cache.db"))
@@ -68,13 +69,7 @@ class TestLocalFileCacheStockPrices:
         """Test setting and getting a single stock price."""
         cache = LocalFileCache(cache_dir=str(tmp_path))
 
-        data = {
-            "open": 150.0,
-            "high": 152.0,
-            "low": 149.0,
-            "close": 151.5,
-            "volume": 1000000
-        }
+        data = {"open": 150.0, "high": 152.0, "low": 149.0, "close": 151.5, "volume": 1000000}
         cache.set_stock_price("AAPL", "2026-01-15", data)
 
         result = cache.get_stock_prices("AAPL")
@@ -86,9 +81,27 @@ class TestLocalFileCacheStockPrices:
         cache = LocalFileCache(cache_dir=str(tmp_path))
 
         prices = {
-            "2026-01-13": {"open": 149.0, "high": 150.0, "low": 148.0, "close": 149.5, "volume": 900000},
-            "2026-01-14": {"open": 149.5, "high": 151.0, "low": 149.0, "close": 150.5, "volume": 1000000},
-            "2026-01-15": {"open": 150.5, "high": 152.0, "low": 150.0, "close": 151.5, "volume": 1100000}
+            "2026-01-13": {
+                "open": 149.0,
+                "high": 150.0,
+                "low": 148.0,
+                "close": 149.5,
+                "volume": 900000,
+            },
+            "2026-01-14": {
+                "open": 149.5,
+                "high": 151.0,
+                "low": 149.0,
+                "close": 150.5,
+                "volume": 1000000,
+            },
+            "2026-01-15": {
+                "open": 150.5,
+                "high": 152.0,
+                "low": 150.0,
+                "close": 151.5,
+                "volume": 1100000,
+            },
         }
 
         count = cache.set_stock_prices("AAPL", prices)
@@ -106,7 +119,7 @@ class TestLocalFileCacheStockPrices:
             "2026-01-11": {"close": 149.0},
             "2026-01-12": {"close": 150.0},
             "2026-01-13": {"close": 151.0},
-            "2026-01-14": {"close": 152.0}
+            "2026-01-14": {"close": 152.0},
         }
         cache.set_stock_prices("AAPL", prices)
 
@@ -126,10 +139,7 @@ class TestLocalFileCacheStockPrices:
         old_time = (datetime.now() - timedelta(hours=48)).isoformat()
         conn = sqlite3.connect(str(tmp_path / "cache.db"))
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE market_data SET cached_at = ? WHERE symbol = ?",
-            (old_time, "AAPL")
-        )
+        cursor.execute("UPDATE market_data SET cached_at = ? WHERE symbol = ?", (old_time, "AAPL"))
         conn.commit()
         conn.close()
 
@@ -182,10 +192,7 @@ class TestLocalFileCacheStockPrices:
         old_time = (datetime.now() - timedelta(hours=48)).isoformat()
         conn = sqlite3.connect(str(tmp_path / "cache.db"))
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE market_data SET cached_at = ? WHERE symbol = ?",
-            (old_time, "AAPL")
-        )
+        cursor.execute("UPDATE market_data SET cached_at = ? WHERE symbol = ?", (old_time, "AAPL"))
         conn.commit()
         conn.close()
 
@@ -212,7 +219,7 @@ class TestLocalFileCacheOptionContracts:
             "last": 5.60,
             "volume": 500,
             "open_interest": 2000,
-            "implied_volatility": 0.25
+            "implied_volatility": 0.25,
         }
         cache.set_option_contract("AAPL", "2026-01-15T10:00:00", contract)
 
@@ -229,7 +236,7 @@ class TestLocalFileCacheOptionContracts:
             {"expiration_date": "2026-02-21", "strike": 145.0, "option_type": "Call", "bid": 8.0},
             {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call", "bid": 5.5},
             {"expiration_date": "2026-02-21", "strike": 155.0, "option_type": "Call", "bid": 3.0},
-            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Put", "bid": 4.5}
+            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Put", "bid": 4.5},
         ]
 
         count = cache.set_option_contracts("AAPL", "2026-01-15T10:00:00", contracts)
@@ -245,7 +252,7 @@ class TestLocalFileCacheOptionContracts:
         contracts = [
             {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call"},
             {"expiration_date": "2026-03-21", "strike": 150.0, "option_type": "Call"},
-            {"expiration_date": "2026-02-21", "strike": 155.0, "option_type": "Call"}
+            {"expiration_date": "2026-02-21", "strike": 155.0, "option_type": "Call"},
         ]
         cache.set_option_contracts("AAPL", "2026-01-15T10:00:00", contracts)
 
@@ -259,7 +266,7 @@ class TestLocalFileCacheOptionContracts:
         contracts = [
             {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call"},
             {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Put"},
-            {"expiration_date": "2026-02-21", "strike": 155.0, "option_type": "Call"}
+            {"expiration_date": "2026-02-21", "strike": 155.0, "option_type": "Call"},
         ]
         cache.set_option_contracts("AAPL", "2026-01-15T10:00:00", contracts)
 
@@ -273,7 +280,7 @@ class TestLocalFileCacheOptionContracts:
         contracts = [
             {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call"},
             {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Put"},
-            {"expiration_date": "2026-02-21", "strike": 155.0, "option_type": "Put"}
+            {"expiration_date": "2026-02-21", "strike": 155.0, "option_type": "Put"},
         ]
         cache.set_option_contracts("AAPL", "2026-01-15T10:00:00", contracts)
 
@@ -296,7 +303,7 @@ class TestLocalFileCacheOptionContracts:
         contracts = [
             {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call"},  # Valid
             {"bid": 5.50},  # Invalid - missing required fields
-            {"expiration_date": "2026-02-21", "strike": 155.0, "option_type": "Call"}   # Valid
+            {"expiration_date": "2026-02-21", "strike": 155.0, "option_type": "Call"},  # Valid
         ]
 
         count = cache.set_option_contracts("AAPL", "2026-01-15T10:00:00", contracts)
@@ -364,7 +371,7 @@ class TestLocalFileCacheAPIUsageTracking:
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO api_usage (service, date, count) VALUES (?, ?, ?)",
-            ("alpha_vantage", yesterday, 10)
+            ("alpha_vantage", yesterday, 10),
         )
         conn.commit()
         conn.close()
@@ -394,11 +401,11 @@ class TestLocalFileCacheMarketData:
         cache = LocalFileCache(cache_dir=str(tmp_path))
 
         cache.set_stock_price("AAPL", "2026-01-15", {"close": 150.0})
-        cache.set_option_contract("AAPL", "2026-01-15T10:00:00", {
-            "expiration_date": "2026-02-21",
-            "strike": 150.0,
-            "option_type": "Call"
-        })
+        cache.set_option_contract(
+            "AAPL",
+            "2026-01-15T10:00:00",
+            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call"},
+        )
 
         count = cache.delete_market_data(data_type="stock")
 
@@ -413,7 +420,7 @@ class TestLocalFileCacheMarketData:
         prices = {
             "2026-01-10": {"close": 148.0},
             "2026-01-11": {"close": 149.0},
-            "2026-01-15": {"close": 152.0}
+            "2026-01-15": {"close": 152.0},
         }
         cache.set_stock_prices("AAPL", prices)
 
@@ -456,17 +463,20 @@ class TestLocalFileCacheMarketData:
         cache = LocalFileCache(cache_dir=str(tmp_path))
 
         # Add stock prices
-        cache.set_stock_prices("AAPL", {
-            "2026-01-14": {"close": 149.0},
-            "2026-01-15": {"close": 150.0}
-        })
+        cache.set_stock_prices(
+            "AAPL", {"2026-01-14": {"close": 149.0}, "2026-01-15": {"close": 150.0}}
+        )
         cache.set_stock_price("GOOG", "2026-01-15", {"close": 100.0})
 
         # Add options
-        cache.set_option_contracts("AAPL", "2026-01-15T10:00:00", [
-            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call"},
-            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Put"}
-        ])
+        cache.set_option_contracts(
+            "AAPL",
+            "2026-01-15T10:00:00",
+            [
+                {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call"},
+                {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Put"},
+            ],
+        )
 
         stats = cache.get_stats()
 
@@ -490,8 +500,7 @@ class TestLocalFileCacheMarketData:
         conn = sqlite3.connect(str(tmp_path / "cache.db"))
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE market_data SET cached_at = ? WHERE timestamp = ?",
-            (old_time, "2026-01-14")
+            "UPDATE market_data SET cached_at = ? WHERE timestamp = ?", (old_time, "2026-01-14")
         )
         conn.commit()
         conn.close()
@@ -509,11 +518,11 @@ class TestLocalFileCacheMarketData:
 
         # Add both stock and option data
         cache.set_stock_price("AAPL", "2026-01-15", {"close": 150.0})
-        cache.set_option_contract("AAPL", "2026-01-15T10:00:00", {
-            "expiration_date": "2026-02-21",
-            "strike": 150.0,
-            "option_type": "Call"
-        })
+        cache.set_option_contract(
+            "AAPL",
+            "2026-01-15T10:00:00",
+            {"expiration_date": "2026-02-21", "strike": 150.0, "option_type": "Call"},
+        )
 
         # Both should be retrievable independently
         stock_result = cache.get_stock_prices("AAPL")
@@ -532,9 +541,27 @@ class TestLocalFileCacheIntegration:
 
         # Simulate caching price data
         prices = {
-            "2026-01-13": {"open": 149.5, "high": 152.0, "low": 148.0, "close": 150.0, "volume": 1000000},
-            "2026-01-14": {"open": 150.5, "high": 153.0, "low": 149.0, "close": 151.5, "volume": 1100000},
-            "2026-01-15": {"open": 151.0, "high": 154.0, "low": 150.0, "close": 152.0, "volume": 1200000}
+            "2026-01-13": {
+                "open": 149.5,
+                "high": 152.0,
+                "low": 148.0,
+                "close": 150.0,
+                "volume": 1000000,
+            },
+            "2026-01-14": {
+                "open": 150.5,
+                "high": 153.0,
+                "low": 149.0,
+                "close": 151.5,
+                "volume": 1100000,
+            },
+            "2026-01-15": {
+                "open": 151.0,
+                "high": 154.0,
+                "low": 150.0,
+                "close": 152.0,
+                "volume": 1200000,
+            },
         }
 
         cache.set_stock_prices("AAPL", prices)

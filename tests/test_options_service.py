@@ -1,11 +1,13 @@
 """Unit tests for options service layer."""
 
-import pytest
-from unittest.mock import Mock, patch
 from datetime import datetime, timezone
-from src.models import OptionContract, OptionsChain
-from src.options_service import OptionsChainService, DataValidationError
+from unittest.mock import Mock, patch
+
+import pytest
+
 from src.finnhub_client import FinnhubAPIError
+from src.models import OptionContract, OptionsChain
+from src.options_service import DataValidationError, OptionsChainService
 
 
 class TestOptionsChainService:
@@ -36,7 +38,7 @@ class TestOptionsChainService:
                     "volume": 1500,
                     "openInterest": 5000,
                     "delta": 0.55,
-                    "gamma": 0.08
+                    "gamma": 0.08,
                 },
                 {
                     "strike": 10.0,
@@ -46,8 +48,8 @@ class TestOptionsChainService:
                     "ask": 0.90,
                     "last": 0.87,
                     "volume": 1200,
-                    "openInterest": 4500
-                }
+                    "openInterest": 4500,
+                },
             ]
         }
 
@@ -77,10 +79,7 @@ class TestOptionsChainService:
         assert result.symbol == "AAPL"
 
     def test_get_options_chain_parses_contracts_correctly(
-        self,
-        service,
-        mock_client,
-        sample_api_response
+        self, service, mock_client, sample_api_response
     ):
         """Test that contracts are parsed correctly."""
         mock_client.get_option_chain.return_value = sample_api_response
@@ -116,7 +115,7 @@ class TestOptionsChainService:
     def test_validate_response_success(self, service):
         """Test validation of valid response."""
         valid_response = {"data": [{"strike": 10.0}]}
-        
+
         # Should not raise exception
         service._validate_response(valid_response)
 
@@ -150,7 +149,7 @@ class TestOptionsChainService:
                 "expirationDate": "2026-01-16",
                 "type": "Call",
                 "bid": 1.25,
-                "ask": 1.30
+                "ask": 1.30,
             }
         ]
 
@@ -167,20 +166,20 @@ class TestOptionsChainService:
                     "expirationDate": "2026-01-16",
                     "type": "Call",
                     "bid": 1.25,
-                    "ask": 1.30
+                    "ask": 1.30,
                 },
                 {
                     # Missing required field 'strike'
                     "expirationDate": "2026-01-16",
-                    "type": "Put"
+                    "type": "Put",
                 },
                 {
                     "strike": 11.0,
                     "expirationDate": "2026-01-16",
                     "type": "Call",
                     "bid": 0.75,
-                    "ask": 0.80
-                }
+                    "ask": 0.80,
+                },
             ]
         }
 
@@ -191,23 +190,14 @@ class TestOptionsChainService:
 
     def test_parse_contracts_all_invalid(self, service):
         """Test that error is raised when all contracts fail to parse."""
-        response = {
-            "data": [
-                {"invalid": "data"},
-                {"also": "invalid"}
-            ]
-        }
+        response = {"data": [{"invalid": "data"}, {"also": "invalid"}]}
 
         with pytest.raises(DataValidationError, match="No valid contracts found"):
             service._parse_contracts(response, "F")
 
     def test_parse_single_contract_required_fields(self, service):
         """Test parsing with only required fields."""
-        data = {
-            "strike": 10.0,
-            "expirationDate": "2026-01-16",
-            "type": "Call"
-        }
+        data = {"strike": 10.0, "expirationDate": "2026-01-16", "type": "Call"}
 
         contract = service._parse_single_contract(data, "F")
 
@@ -236,7 +226,7 @@ class TestOptionsChainService:
             "theta": -0.05,
             "vega": 0.12,
             "rho": 0.03,
-            "impliedVolatility": 35.0  # Finnhub format: percentage
+            "impliedVolatility": 35.0,  # Finnhub format: percentage
         }
 
         contract = service._parse_single_contract(data, "F")
@@ -248,11 +238,7 @@ class TestOptionsChainService:
 
     def test_parse_single_contract_invalid_option_type(self, service):
         """Test that invalid option type raises error."""
-        data = {
-            "strike": 10.0,
-            "expirationDate": "2026-01-16",
-            "type": "Invalid"
-        }
+        data = {"strike": 10.0, "expirationDate": "2026-01-16", "type": "Invalid"}
 
         with pytest.raises(ValueError, match="Invalid option type"):
             service._parse_single_contract(data, "F")
@@ -261,7 +247,7 @@ class TestOptionsChainService:
         """Test that missing required field raises error."""
         data = {
             "expirationDate": "2026-01-16",
-            "type": "Call"
+            "type": "Call",
             # Missing 'strike'
         }
 
@@ -295,20 +281,14 @@ class TestOptionsChainService:
     def test_extract_contracts_from_response(self, service):
         """Test extraction of contracts from alternate structures."""
         # Test with 'options' key
-        response1 = {
-            "options": [
-                {"strike": 10.0, "expirationDate": "2026-01-16", "type": "Call"}
-            ]
-        }
+        response1 = {"options": [{"strike": 10.0, "expirationDate": "2026-01-16", "type": "Call"}]}
         contracts1 = service._extract_contracts_from_response(response1)
         assert len(contracts1) == 1
 
         # Test with nested structure
         response2 = {
             "chain": {
-                "2026-01-16": [
-                    {"strike": 10.0, "expirationDate": "2026-01-16", "type": "Call"}
-                ]
+                "2026-01-16": [{"strike": 10.0, "expirationDate": "2026-01-16", "type": "Call"}]
             }
         }
         contracts2 = service._extract_contracts_from_response(response2)
@@ -322,16 +302,11 @@ class TestOptionsChainService:
 
         # Verify timestamp is valid ISO format
         try:
-            datetime.fromisoformat(result.retrieved_at.replace('Z', '+00:00'))
+            datetime.fromisoformat(result.retrieved_at.replace("Z", "+00:00"))
         except ValueError:
             pytest.fail("Timestamp is not in valid ISO format")
 
-    def test_get_options_chain_counts_contracts(
-        self,
-        service,
-        mock_client,
-        sample_api_response
-    ):
+    def test_get_options_chain_counts_contracts(self, service, mock_client, sample_api_response):
         """Test that service correctly counts calls and puts."""
         mock_client.get_option_chain.return_value = sample_api_response
 

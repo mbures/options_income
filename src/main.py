@@ -6,17 +6,15 @@ This application retrieves options chain data from Finnhub API
 and displays it in various formats.
 """
 
-import sys
-import json
 import argparse
+import json
 import logging
-from typing import NoReturn
+import sys
 
 from .config import FinnhubConfig
-from .finnhub_client import FinnhubClient, FinnhubAPIError
-from .options_service import OptionsChainService, DataValidationError
+from .finnhub_client import FinnhubAPIError, FinnhubClient
 from .models import OptionsChain
-
+from .options_service import DataValidationError, OptionsChainService
 
 # Configure logging
 logging.basicConfig(
@@ -99,7 +97,10 @@ Configuration:
     except ValueError as e:
         print(f"Configuration error: {e}", file=sys.stderr)
         print("\nPlease provide your API key in one of these ways:", file=sys.stderr)
-        print("  1. Create config/finhub_api_key.txt with: finhub_api_key = 'your_key'", file=sys.stderr)
+        print(
+            "  1. Create config/finhub_api_key.txt with: finhub_api_key = 'your_key'",
+            file=sys.stderr,
+        )
         print("  2. Set FINNHUB_API_KEY environment variable", file=sys.stderr)
         print("\nGet a free API key at https://finnhub.io/register", file=sys.stderr)
         sys.exit(1)
@@ -201,9 +202,7 @@ def format_summary(options_chain: OptionsChain) -> str:
         lines.append("")
 
     lines.append("=" * 70)
-    lines.append(
-        "Note: Finnhub options data may have accuracy limitations. " "Verify before trading."
-    )
+    lines.append("Note: Finnhub options data may have accuracy limitations. Verify before trading.")
     lines.append("=" * 70)
 
     return "\n".join(lines)

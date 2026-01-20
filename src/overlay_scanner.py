@@ -31,14 +31,13 @@ Example:
 """
 
 import logging
-import math
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from enum import Enum
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any, Optional
 
 from .models import OptionContract, OptionsChain
-from .strike_optimizer import StrikeOptimizer, ProbabilityResult
+from .strike_optimizer import StrikeOptimizer
 
 logger = logging.getLogger(__name__)
 
@@ -58,14 +57,15 @@ class DeltaBand(Enum):
 
     These bands are calibrated for weekly options (5-14 DTE).
     """
-    DEFENSIVE = "defensive"       # 0.05-0.10 delta, ~5-10% P(ITM)
-    CONSERVATIVE = "conservative" # 0.10-0.15 delta, ~10-15% P(ITM)
-    MODERATE = "moderate"         # 0.15-0.25 delta, ~15-25% P(ITM)
-    AGGRESSIVE = "aggressive"     # 0.25-0.35 delta, ~25-35% P(ITM)
+
+    DEFENSIVE = "defensive"  # 0.05-0.10 delta, ~5-10% P(ITM)
+    CONSERVATIVE = "conservative"  # 0.10-0.15 delta, ~10-15% P(ITM)
+    MODERATE = "moderate"  # 0.15-0.25 delta, ~15-25% P(ITM)
+    AGGRESSIVE = "aggressive"  # 0.25-0.35 delta, ~25-35% P(ITM)
 
 
 # Delta ranges for each band (min_delta, max_delta)
-DELTA_BAND_RANGES: Dict[DeltaBand, Tuple[float, float]] = {
+DELTA_BAND_RANGES: dict[DeltaBand, tuple[float, float]] = {
     DeltaBand.DEFENSIVE: (0.05, 0.10),
     DeltaBand.CONSERVATIVE: (0.10, 0.15),
     DeltaBand.MODERATE: (0.15, 0.25),
@@ -80,10 +80,11 @@ class SlippageModel(Enum):
     Slippage represents the difference between expected fill price
     and actual fill price.
     """
-    HALF_SPREAD = "half_spread"           # Assume fill at mid
+
+    HALF_SPREAD = "half_spread"  # Assume fill at mid
     HALF_SPREAD_CAPPED = "half_spread_capped"  # Half spread, capped at max
-    FULL_SPREAD = "full_spread"           # Assume fill at bid (worst case)
-    NONE = "none"                         # No slippage (optimistic)
+    FULL_SPREAD = "full_spread"  # Assume fill at bid (worst case)
+    NONE = "none"  # No slippage (optimistic)
 
 
 class RejectionReason(Enum):
@@ -93,6 +94,7 @@ class RejectionReason(Enum):
     Explicit rejection reasons help users understand why certain
     strikes were excluded from the top recommendations.
     """
+
     ZERO_BID = "zero_bid"
     LOW_PREMIUM = "low_premium"
     WIDE_SPREAD_ABSOLUTE = "wide_spread_absolute"
@@ -124,13 +126,14 @@ class RejectionDetail:
         margin: How far from passing (normalized 0-1, 0 = at threshold)
         margin_display: Human-readable margin description
     """
+
     reason: RejectionReason
     actual_value: float
     threshold: float
     margin: float  # 0 = at threshold, 1 = far from threshold
     margin_display: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "reason": self.reason.value,
@@ -153,11 +156,12 @@ class PortfolioHolding:
         acquired_date: Date shares were acquired (optional, for holding period)
         account_type: 'taxable' or 'qualified' (optional, affects warnings)
     """
+
     symbol: str
     shares: int
     cost_basis: Optional[float] = None
     acquired_date: Optional[str] = None  # ISO format YYYY-MM-DD
-    account_type: Optional[str] = None   # 'taxable' or 'qualified'
+    account_type: Optional[str] = None  # 'taxable' or 'qualified'
 
     def __post_init__(self) -> None:
         """Validate holding data."""
@@ -168,8 +172,10 @@ class PortfolioHolding:
             raise ValueError(f"Shares must be non-negative, got {self.shares}")
         if self.cost_basis is not None and self.cost_basis < 0:
             raise ValueError(f"Cost basis must be non-negative, got {self.cost_basis}")
-        if self.account_type and self.account_type not in ('taxable', 'qualified'):
-            raise ValueError(f"Account type must be 'taxable' or 'qualified', got {self.account_type}")
+        if self.account_type and self.account_type not in ("taxable", "qualified"):
+            raise ValueError(
+                f"Account type must be 'taxable' or 'qualified', got {self.account_type}"
+            )
 
 
 @dataclass
@@ -202,6 +208,7 @@ class ScannerConfig:
         min_bid_price: Minimum bid price to consider (default $0.05)
         weeks_to_scan: Number of weekly expirations to scan (default 3)
     """
+
     overwrite_cap_pct: float = 25.0
     per_contract_fee: float = 0.65
     slippage_model: SlippageModel = SlippageModel.HALF_SPREAD_CAPPED
@@ -222,13 +229,19 @@ class ScannerConfig:
     def __post_init__(self) -> None:
         """Validate configuration."""
         if not 0 < self.overwrite_cap_pct <= 100:
-            raise ValueError(f"overwrite_cap_pct must be between 0 and 100, got {self.overwrite_cap_pct}")
+            raise ValueError(
+                f"overwrite_cap_pct must be between 0 and 100, got {self.overwrite_cap_pct}"
+            )
         if self.per_contract_fee < 0:
             raise ValueError(f"per_contract_fee must be non-negative, got {self.per_contract_fee}")
         if self.min_weekly_yield_bps < 0:
-            raise ValueError(f"min_weekly_yield_bps must be non-negative, got {self.min_weekly_yield_bps}")
+            raise ValueError(
+                f"min_weekly_yield_bps must be non-negative, got {self.min_weekly_yield_bps}"
+            )
         if self.min_friction_multiple < 1:
-            raise ValueError(f"min_friction_multiple must be >= 1, got {self.min_friction_multiple}")
+            raise ValueError(
+                f"min_friction_multiple must be >= 1, got {self.min_friction_multiple}"
+            )
 
 
 @dataclass
@@ -243,13 +256,14 @@ class ExecutionCostEstimate:
         net_credit: Gross premium - commission - slippage
         net_credit_per_share: Net credit / 100
     """
+
     gross_premium: float
     commission: float
     slippage: float
     net_credit: float
     net_credit_per_share: float
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "gross_premium": round(self.gross_premium, 2),
@@ -289,6 +303,7 @@ class CandidateStrike:
         rejection_reasons: List of rejection reasons (if filtered out)
         is_recommended: Whether this strike passed all filters
     """
+
     contract: OptionContract
     strike: float
     expiration_date: str
@@ -308,14 +323,14 @@ class CandidateStrike:
     total_net_credit: float
     annualized_yield_pct: float
     days_to_expiry: int
-    warnings: List[str] = field(default_factory=list)
-    rejection_reasons: List[RejectionReason] = field(default_factory=list)
-    rejection_details: List["RejectionDetail"] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    rejection_reasons: list[RejectionReason] = field(default_factory=list)
+    rejection_details: list["RejectionDetail"] = field(default_factory=list)
     binding_constraint: Optional["RejectionDetail"] = None
     near_miss_score: float = 0.0
     is_recommended: bool = True
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "strike": self.strike,
@@ -339,7 +354,9 @@ class CandidateStrike:
             "warnings": self.warnings,
             "rejection_reasons": [r.value for r in self.rejection_reasons],
             "rejection_details": [d.to_dict() for d in self.rejection_details],
-            "binding_constraint": self.binding_constraint.to_dict() if self.binding_constraint else None,
+            "binding_constraint": self.binding_constraint.to_dict()
+            if self.binding_constraint
+            else None,
             "near_miss_score": round(self.near_miss_score, 4),
             "is_recommended": self.is_recommended,
         }
@@ -364,6 +381,7 @@ class BrokerChecklist:
         checks: List of verification items
         warnings: List of warnings to review
     """
+
     symbol: str
     action: str
     contracts: int
@@ -372,10 +390,10 @@ class BrokerChecklist:
     option_type: str
     limit_price: float
     min_acceptable_credit: float
-    checks: List[str]
-    warnings: List[str]
+    checks: list[str]
+    warnings: list[str]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "symbol": self.symbol,
@@ -412,19 +430,20 @@ class LLMMemoPayload:
         account_type: Taxable vs qualified
         timestamp: When this memo was generated
     """
+
     symbol: str
     current_price: float
     shares_held: int
     contracts_to_write: int
-    candidate: Dict[str, Any]
-    holding: Dict[str, Any]
+    candidate: dict[str, Any]
+    holding: dict[str, Any]
     risk_profile: str
     earnings_status: str
     dividend_status: str
     account_type: Optional[str]
     timestamp: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "symbol": self.symbol,
@@ -461,21 +480,22 @@ class ScanResult:
         warnings: General warnings
         error: Error message if scan failed
     """
+
     symbol: str
     current_price: float
     shares_held: int
     contracts_available: int
-    recommended_strikes: List[CandidateStrike] = field(default_factory=list)
-    rejected_strikes: List[CandidateStrike] = field(default_factory=list)
-    near_miss_candidates: List[CandidateStrike] = field(default_factory=list)
-    earnings_dates: List[str] = field(default_factory=list)
+    recommended_strikes: list[CandidateStrike] = field(default_factory=list)
+    rejected_strikes: list[CandidateStrike] = field(default_factory=list)
+    near_miss_candidates: list[CandidateStrike] = field(default_factory=list)
+    earnings_dates: list[str] = field(default_factory=list)
     has_earnings_conflict: bool = False
     broker_checklist: Optional[BrokerChecklist] = None
     llm_memo_payload: Optional[LLMMemoPayload] = None
-    warnings: List[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     error: Optional[str] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "symbol": self.symbol,
@@ -516,15 +536,12 @@ class EarningsCalendar:
             cache_ttl_hours: Cache time-to-live in hours (default 24)
         """
         self._client = finnhub_client
-        self._cache: Dict[str, Tuple[List[str], float]] = {}
+        self._cache: dict[str, tuple[list[str], float]] = {}
         self._cache_ttl = cache_ttl_hours * 3600
 
     def get_earnings_dates(
-        self,
-        symbol: str,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None
-    ) -> List[str]:
+        self, symbol: str, from_date: Optional[str] = None, to_date: Optional[str] = None
+    ) -> list[str]:
         """
         Get earnings dates for a symbol within date range.
 
@@ -564,12 +581,7 @@ class EarningsCalendar:
             logger.warning(f"Failed to fetch earnings for {symbol}: {e}")
             return []
 
-    def _fetch_earnings_from_finnhub(
-        self,
-        symbol: str,
-        from_date: str,
-        to_date: str
-    ) -> List[str]:
+    def _fetch_earnings_from_finnhub(self, symbol: str, from_date: str, to_date: str) -> list[str]:
         """
         Fetch earnings dates from Finnhub API via FinnhubClient.
 
@@ -584,10 +596,8 @@ class EarningsCalendar:
         return self._client.get_earnings_calendar(symbol, from_date, to_date)
 
     def expiration_spans_earnings(
-        self,
-        symbol: str,
-        expiration_date: str
-    ) -> Tuple[bool, Optional[str]]:
+        self, symbol: str, expiration_date: str
+    ) -> tuple[bool, Optional[str]]:
         """
         Check if an expiration date spans an earnings announcement.
 
@@ -661,7 +671,7 @@ class OverlayScanner:
         self,
         finnhub_client: Any,
         strike_optimizer: StrikeOptimizer,
-        config: Optional[ScannerConfig] = None
+        config: Optional[ScannerConfig] = None,
     ):
         """
         Initialize the overlay scanner.
@@ -676,9 +686,11 @@ class OverlayScanner:
         self.config = config or ScannerConfig()
         self.earnings_calendar = EarningsCalendar(finnhub_client)
 
-        logger.info(f"OverlayScanner initialized with config: "
-                   f"delta_band={self.config.delta_band.value}, "
-                   f"overwrite_cap={self.config.overwrite_cap_pct}%")
+        logger.info(
+            f"OverlayScanner initialized with config: "
+            f"delta_band={self.config.delta_band.value}, "
+            f"overwrite_cap={self.config.overwrite_cap_pct}%"
+        )
 
     def calculate_contracts_to_sell(self, shares: int) -> int:
         """
@@ -701,10 +713,7 @@ class OverlayScanner:
         return max(0, contracts)
 
     def calculate_execution_cost(
-        self,
-        bid: float,
-        ask: float,
-        contracts: int = 1
+        self, bid: float, ask: float, contracts: int = 1
     ) -> ExecutionCostEstimate:
         """
         Calculate estimated execution costs for a trade.
@@ -740,7 +749,7 @@ class OverlayScanner:
             commission=commission,
             slippage=slippage,
             net_credit=net_credit,
-            net_credit_per_share=net_credit_per_share
+            net_credit_per_share=net_credit_per_share,
         )
 
     def compute_delta(
@@ -749,8 +758,8 @@ class OverlayScanner:
         current_price: float,
         volatility: float,
         days_to_expiry: int,
-        option_type: str = "call"
-    ) -> Tuple[float, float]:
+        option_type: str = "call",
+    ) -> tuple[float, float]:
         """
         Compute Black-Scholes delta and P(ITM) for a strike.
 
@@ -769,7 +778,7 @@ class OverlayScanner:
             current_price=current_price,
             volatility=volatility,
             days_to_expiry=max(1, days_to_expiry),
-            option_type=option_type
+            option_type=option_type,
         )
         return abs(prob_result.delta), prob_result.probability
 
@@ -790,11 +799,8 @@ class OverlayScanner:
         return None
 
     def _calculate_margin(
-        self,
-        actual: float,
-        threshold: float,
-        constraint_type: str
-    ) -> Tuple[float, str]:
+        self, actual: float, threshold: float, constraint_type: str
+    ) -> tuple[float, str]:
         """
         Calculate normalized margin from threshold.
 
@@ -807,7 +813,7 @@ class OverlayScanner:
             Tuple of (margin, display_string)
             margin: 0 = at threshold, higher = further from passing
         """
-        if constraint_type == 'min':
+        if constraint_type == "min":
             # For minimum constraints: need actual >= threshold
             if threshold == 0:
                 margin = 1.0 if actual <= 0 else 0.0
@@ -829,10 +835,8 @@ class OverlayScanner:
         return margin, display
 
     def apply_tradability_filters(
-        self,
-        candidate: CandidateStrike,
-        current_price: float = 0.0
-    ) -> Tuple[List[RejectionReason], List[RejectionDetail]]:
+        self, candidate: CandidateStrike, current_price: float = 0.0
+    ) -> tuple[list[RejectionReason], list[RejectionDetail]]:
         """
         Apply tradability filters to a candidate strike.
 
@@ -851,41 +855,47 @@ class OverlayScanner:
         # Zero bid filter
         if candidate.bid <= 0:
             reasons.append(RejectionReason.ZERO_BID)
-            details.append(RejectionDetail(
-                reason=RejectionReason.ZERO_BID,
-                actual_value=candidate.bid,
-                threshold=0.01,
-                margin=1.0,
-                margin_display=f"bid=${candidate.bid:.2f} (no market)"
-            ))
+            details.append(
+                RejectionDetail(
+                    reason=RejectionReason.ZERO_BID,
+                    actual_value=candidate.bid,
+                    threshold=0.01,
+                    margin=1.0,
+                    margin_display=f"bid=${candidate.bid:.2f} (no market)",
+                )
+            )
 
         # Low premium filter
         elif candidate.bid < self.config.min_bid_price:
             margin, display = self._calculate_margin(
-                candidate.bid, self.config.min_bid_price, 'min'
+                candidate.bid, self.config.min_bid_price, "min"
             )
             reasons.append(RejectionReason.LOW_PREMIUM)
-            details.append(RejectionDetail(
-                reason=RejectionReason.LOW_PREMIUM,
-                actual_value=candidate.bid,
-                threshold=self.config.min_bid_price,
-                margin=margin,
-                margin_display=f"bid={display}"
-            ))
+            details.append(
+                RejectionDetail(
+                    reason=RejectionReason.LOW_PREMIUM,
+                    actual_value=candidate.bid,
+                    threshold=self.config.min_bid_price,
+                    margin=margin,
+                    margin_display=f"bid={display}",
+                )
+            )
 
         # Spread absolute filter (PRIMARY - always checked)
         if candidate.spread_absolute > self.config.max_spread_absolute:
             margin, display = self._calculate_margin(
-                candidate.spread_absolute, self.config.max_spread_absolute, 'max'
+                candidate.spread_absolute, self.config.max_spread_absolute, "max"
             )
             reasons.append(RejectionReason.WIDE_SPREAD_ABSOLUTE)
-            details.append(RejectionDetail(
-                reason=RejectionReason.WIDE_SPREAD_ABSOLUTE,
-                actual_value=candidate.spread_absolute,
-                threshold=self.config.max_spread_absolute,
-                margin=margin,
-                margin_display=f"spread=${candidate.spread_absolute:.2f} vs ${self.config.max_spread_absolute:.2f}"
-            ))
+            details.append(
+                RejectionDetail(
+                    reason=RejectionReason.WIDE_SPREAD_ABSOLUTE,
+                    actual_value=candidate.spread_absolute,
+                    threshold=self.config.max_spread_absolute,
+                    margin=margin,
+                    margin_display=f"spread=${candidate.spread_absolute:.2f} vs ${self.config.max_spread_absolute:.2f}",
+                )
+            )
 
         # Spread relative filter (SECONDARY - only for mid >= threshold)
         # For low-premium weeklies, percentage spreads are misleading due to tick constraints
@@ -893,44 +903,50 @@ class OverlayScanner:
         if candidate.mid_price >= self.config.min_mid_for_relative_spread:
             if candidate.spread_relative_pct > self.config.max_spread_relative_pct:
                 margin, display = self._calculate_margin(
-                    candidate.spread_relative_pct, self.config.max_spread_relative_pct, 'max'
+                    candidate.spread_relative_pct, self.config.max_spread_relative_pct, "max"
                 )
                 reasons.append(RejectionReason.WIDE_SPREAD_RELATIVE)
-                details.append(RejectionDetail(
-                    reason=RejectionReason.WIDE_SPREAD_RELATIVE,
-                    actual_value=candidate.spread_relative_pct,
-                    threshold=self.config.max_spread_relative_pct,
-                    margin=margin,
-                    margin_display=f"spread%={candidate.spread_relative_pct:.1f}% vs {self.config.max_spread_relative_pct:.1f}% (mid=${candidate.mid_price:.2f})"
-                ))
+                details.append(
+                    RejectionDetail(
+                        reason=RejectionReason.WIDE_SPREAD_RELATIVE,
+                        actual_value=candidate.spread_relative_pct,
+                        threshold=self.config.max_spread_relative_pct,
+                        margin=margin,
+                        margin_display=f"spread%={candidate.spread_relative_pct:.1f}% vs {self.config.max_spread_relative_pct:.1f}% (mid=${candidate.mid_price:.2f})",
+                    )
+                )
 
         # Open interest filter
         if candidate.open_interest < self.config.min_open_interest:
             margin, display = self._calculate_margin(
-                candidate.open_interest, self.config.min_open_interest, 'min'
+                candidate.open_interest, self.config.min_open_interest, "min"
             )
             reasons.append(RejectionReason.LOW_OPEN_INTEREST)
-            details.append(RejectionDetail(
-                reason=RejectionReason.LOW_OPEN_INTEREST,
-                actual_value=candidate.open_interest,
-                threshold=self.config.min_open_interest,
-                margin=margin,
-                margin_display=f"OI={int(candidate.open_interest)} vs {int(self.config.min_open_interest)}"
-            ))
+            details.append(
+                RejectionDetail(
+                    reason=RejectionReason.LOW_OPEN_INTEREST,
+                    actual_value=candidate.open_interest,
+                    threshold=self.config.min_open_interest,
+                    margin=margin,
+                    margin_display=f"OI={int(candidate.open_interest)} vs {int(self.config.min_open_interest)}",
+                )
+            )
 
         # Volume filter
         if candidate.volume < self.config.min_volume:
             margin, display = self._calculate_margin(
-                candidate.volume, self.config.min_volume, 'min'
+                candidate.volume, self.config.min_volume, "min"
             )
             reasons.append(RejectionReason.LOW_VOLUME)
-            details.append(RejectionDetail(
-                reason=RejectionReason.LOW_VOLUME,
-                actual_value=candidate.volume,
-                threshold=self.config.min_volume,
-                margin=margin,
-                margin_display=f"vol={int(candidate.volume)} vs {int(self.config.min_volume)}"
-            ))
+            details.append(
+                RejectionDetail(
+                    reason=RejectionReason.LOW_VOLUME,
+                    actual_value=candidate.volume,
+                    threshold=self.config.min_volume,
+                    margin=margin,
+                    margin_display=f"vol={int(candidate.volume)} vs {int(self.config.min_volume)}",
+                )
+            )
 
         # Yield-based filter: net_credit / notional >= min_weekly_yield_bps
         # This scales across stock prices: 10 bps on $10 stock = $0.10, on $300 stock = $3.00
@@ -944,17 +960,21 @@ class OverlayScanner:
 
             if actual_yield_bps < self.config.min_weekly_yield_bps:
                 margin, _ = self._calculate_margin(
-                    actual_yield_bps, self.config.min_weekly_yield_bps, 'min'
+                    actual_yield_bps, self.config.min_weekly_yield_bps, "min"
                 )
-                min_credit_for_yield = (self.config.min_weekly_yield_bps / 10000) * notional_per_contract
+                min_credit_for_yield = (
+                    self.config.min_weekly_yield_bps / 10000
+                ) * notional_per_contract
                 reasons.append(RejectionReason.YIELD_TOO_LOW)
-                details.append(RejectionDetail(
-                    reason=RejectionReason.YIELD_TOO_LOW,
-                    actual_value=actual_yield_bps,
-                    threshold=self.config.min_weekly_yield_bps,
-                    margin=margin,
-                    margin_display=f"yield={actual_yield_bps:.1f}bps vs {self.config.min_weekly_yield_bps:.1f}bps (need ${min_credit_for_yield:.2f})"
-                ))
+                details.append(
+                    RejectionDetail(
+                        reason=RejectionReason.YIELD_TOO_LOW,
+                        actual_value=actual_yield_bps,
+                        threshold=self.config.min_weekly_yield_bps,
+                        margin=margin,
+                        margin_display=f"yield={actual_yield_bps:.1f}bps vs {self.config.min_weekly_yield_bps:.1f}bps (need ${min_credit_for_yield:.2f})",
+                    )
+                )
 
         # Friction floor: net_credit >= min_friction_multiple * (commission + slippage)
         # Prevents trading where costs consume most of the premium
@@ -963,24 +983,21 @@ class OverlayScanner:
         net_credit = candidate.cost_estimate.net_credit
 
         if net_credit < min_credit_for_friction:
-            margin, _ = self._calculate_margin(
-                net_credit, min_credit_for_friction, 'min'
-            )
+            margin, _ = self._calculate_margin(net_credit, min_credit_for_friction, "min")
             reasons.append(RejectionReason.FRICTION_TOO_HIGH)
-            details.append(RejectionDetail(
-                reason=RejectionReason.FRICTION_TOO_HIGH,
-                actual_value=net_credit,
-                threshold=min_credit_for_friction,
-                margin=margin,
-                margin_display=f"net=${net_credit:.2f} vs {self.config.min_friction_multiple:.1f}x friction (${min_credit_for_friction:.2f})"
-            ))
+            details.append(
+                RejectionDetail(
+                    reason=RejectionReason.FRICTION_TOO_HIGH,
+                    actual_value=net_credit,
+                    threshold=min_credit_for_friction,
+                    margin=margin,
+                    margin_display=f"net=${net_credit:.2f} vs {self.config.min_friction_multiple:.1f}x friction (${min_credit_for_friction:.2f})",
+                )
+            )
 
         return reasons, details
 
-    def apply_delta_band_filter(
-        self,
-        candidate: CandidateStrike
-    ) -> Optional[RejectionDetail]:
+    def apply_delta_band_filter(self, candidate: CandidateStrike) -> Optional[RejectionDetail]:
         """
         Check if candidate delta is within the configured delta band.
 
@@ -1012,13 +1029,11 @@ class OverlayScanner:
             actual_value=delta,
             threshold=min_delta if delta < min_delta else max_delta,
             margin=margin,
-            margin_display=margin_display
+            margin_display=margin_display,
         )
 
     def calculate_near_miss_score(
-        self,
-        candidate: CandidateStrike,
-        max_net_credit: float = 100.0
+        self, candidate: CandidateStrike, max_net_credit: float = 100.0
     ) -> float:
         """
         Calculate near-miss score for a rejected candidate.
@@ -1054,9 +1069,7 @@ class OverlayScanner:
         return credit_score + rejection_score + margin_score
 
     def populate_near_miss_details(
-        self,
-        candidate: CandidateStrike,
-        max_net_credit: float = 100.0
+        self, candidate: CandidateStrike, max_net_credit: float = 100.0
     ) -> None:
         """
         Populate near-miss analysis fields on a rejected candidate.
@@ -1074,22 +1087,17 @@ class OverlayScanner:
             return
 
         # Find binding constraint (smallest margin)
-        candidate.binding_constraint = min(
-            candidate.rejection_details,
-            key=lambda d: d.margin
-        )
+        candidate.binding_constraint = min(candidate.rejection_details, key=lambda d: d.margin)
 
         # Calculate near-miss score
-        candidate.near_miss_score = self.calculate_near_miss_score(
-            candidate, max_net_credit
-        )
+        candidate.near_miss_score = self.calculate_near_miss_score(candidate, max_net_credit)
 
     def generate_broker_checklist(
         self,
         symbol: str,
         candidate: CandidateStrike,
         earnings_clear: bool,
-        dividend_verified: bool = False
+        dividend_verified: bool = False,
     ) -> BrokerChecklist:
         """
         Generate a broker checklist for a recommended trade.
@@ -1135,7 +1143,7 @@ class OverlayScanner:
             limit_price=candidate.mid_price,
             min_acceptable_credit=candidate.bid,
             checks=checks,
-            warnings=warnings
+            warnings=warnings,
         )
 
     def generate_llm_memo_payload(
@@ -1145,7 +1153,7 @@ class OverlayScanner:
         holding: PortfolioHolding,
         candidate: CandidateStrike,
         earnings_status: str,
-        dividend_status: str
+        dividend_status: str,
     ) -> LLMMemoPayload:
         """
         Generate structured payload for LLM decision memo.
@@ -1180,7 +1188,7 @@ class OverlayScanner:
             earnings_status=earnings_status,
             dividend_status=dividend_status,
             account_type=holding.account_type,
-            timestamp=datetime.now().isoformat()
+            timestamp=datetime.now().isoformat(),
         )
 
     def scan_holding(
@@ -1189,7 +1197,7 @@ class OverlayScanner:
         current_price: float,
         options_chain: OptionsChain,
         volatility: float,
-        override_earnings_check: bool = False
+        override_earnings_check: bool = False,
     ) -> ScanResult:
         """
         Scan a single holding for covered call opportunities.
@@ -1211,7 +1219,7 @@ class OverlayScanner:
             symbol=symbol,
             current_price=current_price,
             shares_held=holding.shares,
-            contracts_available=contracts_available
+            contracts_available=contracts_available,
         )
 
         # Check if holding is actionable
@@ -1231,7 +1239,7 @@ class OverlayScanner:
             return result
 
         # Get weekly expirations
-        expirations = sorted(set(c.expiration_date for c in calls))[:self.config.weeks_to_scan]
+        expirations = sorted({c.expiration_date for c in calls})[: self.config.weeks_to_scan]
 
         recommended = []
         rejected = []
@@ -1286,7 +1294,7 @@ class OverlayScanner:
                     current_price=current_price,
                     volatility=volatility,
                     days_to_expiry=days_to_expiry,
-                    option_type="call"
+                    option_type="call",
                 )
 
                 # Compute sigma distance for diagnostic
@@ -1296,7 +1304,7 @@ class OverlayScanner:
                         current_price=current_price,
                         volatility=volatility,
                         days_to_expiry=days_to_expiry,
-                        option_type="call"
+                        option_type="call",
                     )
                 except (ValueError, ZeroDivisionError):
                     sigma_distance = None
@@ -1306,15 +1314,15 @@ class OverlayScanner:
 
                 # Calculate execution cost
                 cost_estimate = self.calculate_execution_cost(
-                    bid=bid,
-                    ask=ask,
-                    contracts=contracts_available
+                    bid=bid, ask=ask, contracts=contracts_available
                 )
 
                 # Calculate annualized yield
                 position_value = current_price * 100 * contracts_available
                 if position_value > 0 and days_to_expiry > 0:
-                    annualized_yield = (cost_estimate.net_credit / position_value) * (365 / days_to_expiry) * 100
+                    annualized_yield = (
+                        (cost_estimate.net_credit / position_value) * (365 / days_to_expiry) * 100
+                    )
                 else:
                     annualized_yield = 0
 
@@ -1337,7 +1345,7 @@ class OverlayScanner:
                     contracts_to_sell=contracts_available,
                     total_net_credit=cost_estimate.net_credit,
                     annualized_yield_pct=annualized_yield,
-                    days_to_expiry=days_to_expiry
+                    days_to_expiry=days_to_expiry,
                 )
 
                 # Apply tradability filters (returns tuple of reasons and details)
@@ -1354,13 +1362,15 @@ class OverlayScanner:
                 # Check earnings if applicable
                 if spans_earnings:
                     rejection_reasons.append(RejectionReason.EARNINGS_WEEK)
-                    rejection_details.append(RejectionDetail(
-                        reason=RejectionReason.EARNINGS_WEEK,
-                        actual_value=1.0,
-                        threshold=0.0,
-                        margin=1.0,  # Hard gate - no partial margin
-                        margin_display=f"earnings on {earn_date} before {exp_date}"
-                    ))
+                    rejection_details.append(
+                        RejectionDetail(
+                            reason=RejectionReason.EARNINGS_WEEK,
+                            actual_value=1.0,
+                            threshold=0.0,
+                            margin=1.0,  # Hard gate - no partial margin
+                            margin_display=f"earnings on {earn_date} before {exp_date}",
+                        )
+                    )
                     candidate.warnings.append(f"Expiration spans earnings on {earn_date}")
 
                 if rejection_reasons:
@@ -1375,10 +1385,7 @@ class OverlayScanner:
         recommended.sort(key=lambda c: c.total_net_credit, reverse=True)
 
         # Calculate near-miss scores for rejected candidates
-        max_net_credit = max(
-            (c.total_net_credit for c in rejected),
-            default=100.0
-        ) or 100.0
+        max_net_credit = max((c.total_net_credit for c in rejected), default=100.0) or 100.0
 
         for candidate in rejected:
             self.populate_near_miss_details(candidate, max_net_credit)
@@ -1399,7 +1406,7 @@ class OverlayScanner:
                 symbol=symbol,
                 candidate=top,
                 earnings_clear=earnings_clear,
-                dividend_verified=False  # TODO: Add dividend checking
+                dividend_verified=False,  # TODO: Add dividend checking
             )
 
             earnings_status = "CLEAR" if earnings_clear else "UNVERIFIED"
@@ -1411,7 +1418,7 @@ class OverlayScanner:
                 holding=holding,
                 candidate=top,
                 earnings_status=earnings_status,
-                dividend_status=dividend_status
+                dividend_status=dividend_status,
             )
 
         logger.info(
@@ -1423,12 +1430,12 @@ class OverlayScanner:
 
     def scan_portfolio(
         self,
-        holdings: List[PortfolioHolding],
-        current_prices: Dict[str, float],
-        options_chains: Dict[str, OptionsChain],
-        volatilities: Dict[str, float],
-        override_earnings_check: bool = False
-    ) -> Dict[str, ScanResult]:
+        holdings: list[PortfolioHolding],
+        current_prices: dict[str, float],
+        options_chains: dict[str, OptionsChain],
+        volatilities: dict[str, float],
+        override_earnings_check: bool = False,
+    ) -> dict[str, ScanResult]:
         """
         Scan entire portfolio for covered call opportunities.
 
@@ -1454,7 +1461,7 @@ class OverlayScanner:
                     current_price=0,
                     shares_held=holding.shares,
                     contracts_available=0,
-                    error=f"No price data for {symbol}"
+                    error=f"No price data for {symbol}",
                 )
                 continue
 
@@ -1464,7 +1471,7 @@ class OverlayScanner:
                     current_price=current_prices[symbol],
                     shares_held=holding.shares,
                     contracts_available=0,
-                    error=f"No options chain for {symbol}"
+                    error=f"No options chain for {symbol}",
                 )
                 continue
 
@@ -1474,7 +1481,7 @@ class OverlayScanner:
                     current_price=current_prices[symbol],
                     shares_held=holding.shares,
                     contracts_available=0,
-                    error=f"No volatility data for {symbol}"
+                    error=f"No volatility data for {symbol}",
                 )
                 continue
 
@@ -1484,7 +1491,7 @@ class OverlayScanner:
                 current_price=current_prices[symbol],
                 options_chain=options_chains[symbol],
                 volatility=volatilities[symbol],
-                override_earnings_check=override_earnings_check
+                override_earnings_check=override_earnings_check,
             )
 
             results[symbol] = result
@@ -1493,10 +1500,8 @@ class OverlayScanner:
         return results
 
     def generate_trade_blotter(
-        self,
-        scan_results: Dict[str, ScanResult],
-        top_n: int = 3
-    ) -> List[Dict[str, Any]]:
+        self, scan_results: dict[str, ScanResult], top_n: int = 3
+    ) -> list[dict[str, Any]]:
         """
         Generate a trade blotter from scan results.
 
@@ -1514,51 +1519,62 @@ class OverlayScanner:
 
         for symbol, result in scan_results.items():
             if result.error:
-                blotter.append({
-                    "symbol": symbol,
-                    "status": "ERROR",
-                    "error": result.error,
-                    "recommendations": []
-                })
+                blotter.append(
+                    {
+                        "symbol": symbol,
+                        "status": "ERROR",
+                        "error": result.error,
+                        "recommendations": [],
+                    }
+                )
                 continue
 
             if not result.recommended_strikes:
-                blotter.append({
-                    "symbol": symbol,
-                    "status": "NO_RECOMMENDATIONS",
-                    "rejected_count": len(result.rejected_strikes),
-                    "recommendations": []
-                })
+                blotter.append(
+                    {
+                        "symbol": symbol,
+                        "status": "NO_RECOMMENDATIONS",
+                        "rejected_count": len(result.rejected_strikes),
+                        "recommendations": [],
+                    }
+                )
                 continue
 
             recommendations = []
             for strike in result.recommended_strikes[:top_n]:
-                recommendations.append({
-                    "strike": strike.strike,
-                    "expiration": strike.expiration_date,
-                    "contracts": strike.contracts_to_sell,
-                    "net_credit": round(strike.total_net_credit, 2),
-                    "delta": round(strike.delta, 3),
-                    "annualized_yield_pct": round(strike.annualized_yield_pct, 2),
-                    "delta_band": strike.delta_band.value if strike.delta_band else None,
-                })
+                recommendations.append(
+                    {
+                        "strike": strike.strike,
+                        "expiration": strike.expiration_date,
+                        "contracts": strike.contracts_to_sell,
+                        "net_credit": round(strike.total_net_credit, 2),
+                        "delta": round(strike.delta, 3),
+                        "annualized_yield_pct": round(strike.annualized_yield_pct, 2),
+                        "delta_band": strike.delta_band.value if strike.delta_band else None,
+                    }
+                )
 
-            blotter.append({
-                "symbol": symbol,
-                "status": "OK",
-                "current_price": round(result.current_price, 2),
-                "shares": result.shares_held,
-                "contracts_available": result.contracts_available,
-                "earnings_clear": not result.has_earnings_conflict,
-                "recommendations": recommendations,
-                "broker_checklist": result.broker_checklist.to_dict() if result.broker_checklist else None,
-            })
+            blotter.append(
+                {
+                    "symbol": symbol,
+                    "status": "OK",
+                    "current_price": round(result.current_price, 2),
+                    "shares": result.shares_held,
+                    "contracts_available": result.contracts_available,
+                    "earnings_clear": not result.has_earnings_conflict,
+                    "recommendations": recommendations,
+                    "broker_checklist": result.broker_checklist.to_dict()
+                    if result.broker_checklist
+                    else None,
+                }
+            )
 
         # Sort by total potential net credit
         blotter.sort(
             key=lambda x: x.get("recommendations", [{}])[0].get("net_credit", 0)
-            if x.get("recommendations") else 0,
-            reverse=True
+            if x.get("recommendations")
+            else 0,
+            reverse=True,
         )
 
         return blotter

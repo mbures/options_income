@@ -141,14 +141,16 @@ pytest tests/test_models.py -v
 
 ## Code Quality Checks
 
-### Format Code
+### Lint and Format Code
 ```bash
-black src/ tests/
-```
+# Check for linting issues
+ruff check .
 
-### Lint Code
-```bash
-pylint src/
+# Auto-fix linting issues
+ruff check . --fix
+
+# Format code
+ruff format .
 ```
 
 ### Type Check
@@ -296,7 +298,7 @@ For production use, consider:
 - Lines of Code: ~1,200 (including tests)
 - Test Coverage: 98% (core modules)
 - Documentation: 3 major documents + inline docs
-- Code Quality: 9.31/10 (pylint)
+- Code Quality: Passes ruff linting
 - Time to Implement: Professional full-stack solution
 
 **Created**: January 13, 2026

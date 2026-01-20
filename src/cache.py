@@ -31,10 +31,11 @@ Schema:
 import json
 import logging
 import sqlite3
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Generator
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -162,12 +163,7 @@ class LocalFileCache:
 
     # ==================== Stock Price Methods ====================
 
-    def set_stock_price(
-        self,
-        symbol: str,
-        timestamp: str,
-        data: Dict[str, Any]
-    ) -> None:
+    def set_stock_price(self, symbol: str, timestamp: str, data: dict[str, Any]) -> None:
         """
         Store a single stock price data point.
 
@@ -193,7 +189,7 @@ class LocalFileCache:
                     (timestamp, symbol, data_type, json_data, expiration_date, strike, option_type, cached_at)
                     VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)
                     """,
-                    (timestamp, symbol, self.DATA_TYPE_STOCK, json_data, cached_at)
+                    (timestamp, symbol, self.DATA_TYPE_STOCK, json_data, cached_at),
                 )
                 conn.commit()
 
@@ -201,13 +197,9 @@ class LocalFileCache:
 
         except (sqlite3.Error, TypeError) as e:
             logger.error(f"Cache write error for stock {symbol}: {e}")
-            raise CacheError(f"Failed to cache stock price for {symbol}: {e}")
+            raise CacheError(f"Failed to cache stock price for {symbol}: {e}") from e
 
-    def set_stock_prices(
-        self,
-        symbol: str,
-        prices: Dict[str, Dict[str, Any]]
-    ) -> int:
+    def set_stock_prices(self, symbol: str, prices: dict[str, dict[str, Any]]) -> int:
         """
         Store multiple stock price data points.
 
@@ -238,7 +230,7 @@ class LocalFileCache:
                         (timestamp, symbol, data_type, json_data, expiration_date, strike, option_type, cached_at)
                         VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)
                         """,
-                        (timestamp, symbol, self.DATA_TYPE_STOCK, json_data, cached_at)
+                        (timestamp, symbol, self.DATA_TYPE_STOCK, json_data, cached_at),
                     )
                     count += 1
 
@@ -249,15 +241,15 @@ class LocalFileCache:
 
         except (sqlite3.Error, TypeError) as e:
             logger.error(f"Cache write error for stock prices {symbol}: {e}")
-            raise CacheError(f"Failed to cache stock prices for {symbol}: {e}")
+            raise CacheError(f"Failed to cache stock prices for {symbol}: {e}") from e
 
     def get_stock_prices(
         self,
         symbol: str,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        max_age_hours: Optional[float] = None
-    ) -> Dict[str, Dict[str, Any]]:
+        max_age_hours: Optional[float] = None,
+    ) -> dict[str, dict[str, Any]]:
         """
         Retrieve stock price data points.
 
@@ -283,7 +275,7 @@ class LocalFileCache:
                 FROM market_data
                 WHERE symbol = ? AND data_type = ?
             """
-            params: List[Any] = [symbol, self.DATA_TYPE_STOCK]
+            params: list[Any] = [symbol, self.DATA_TYPE_STOCK]
 
             if start_date:
                 query += " AND timestamp >= ?"
@@ -313,11 +305,7 @@ class LocalFileCache:
         logger.debug(f"Retrieved {len(result)} stock prices for {symbol}")
         return result
 
-    def has_stock_prices(
-        self,
-        symbol: str,
-        max_age_hours: Optional[float] = None
-    ) -> bool:
+    def has_stock_prices(self, symbol: str, max_age_hours: Optional[float] = None) -> bool:
         """
         Check if we have cached stock prices for a symbol.
 
@@ -338,7 +326,7 @@ class LocalFileCache:
                 FROM market_data
                 WHERE symbol = ? AND data_type = ?
             """
-            params: List[Any] = [symbol, self.DATA_TYPE_STOCK]
+            params: list[Any] = [symbol, self.DATA_TYPE_STOCK]
 
             if max_age_hours is not None:
                 cutoff = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
@@ -352,12 +340,7 @@ class LocalFileCache:
 
     # ==================== Option Contract Methods ====================
 
-    def set_option_contract(
-        self,
-        symbol: str,
-        timestamp: str,
-        contract: Dict[str, Any]
-    ) -> None:
+    def set_option_contract(self, symbol: str, timestamp: str, contract: dict[str, Any]) -> None:
         """
         Store a single option contract.
 
@@ -395,8 +378,16 @@ class LocalFileCache:
                     (timestamp, symbol, data_type, json_data, expiration_date, strike, option_type, cached_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (timestamp, symbol, self.DATA_TYPE_OPTION, json_data,
-                     expiration_date, strike, option_type, cached_at)
+                    (
+                        timestamp,
+                        symbol,
+                        self.DATA_TYPE_OPTION,
+                        json_data,
+                        expiration_date,
+                        strike,
+                        option_type,
+                        cached_at,
+                    ),
                 )
                 conn.commit()
 
@@ -404,13 +395,10 @@ class LocalFileCache:
 
         except (sqlite3.Error, TypeError) as e:
             logger.error(f"Cache write error for option {symbol}: {e}")
-            raise CacheError(f"Failed to cache option contract for {symbol}: {e}")
+            raise CacheError(f"Failed to cache option contract for {symbol}: {e}") from e
 
     def set_option_contracts(
-        self,
-        symbol: str,
-        timestamp: str,
-        contracts: List[Dict[str, Any]]
+        self, symbol: str, timestamp: str, contracts: list[dict[str, Any]]
     ) -> int:
         """
         Store multiple option contracts.
@@ -448,9 +436,16 @@ class LocalFileCache:
                         (timestamp, symbol, data_type, json_data, expiration_date, strike, option_type, cached_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (timestamp, symbol, self.DATA_TYPE_OPTION, json_data,
-                         contract["expiration_date"], float(contract["strike"]),
-                         contract["option_type"], cached_at)
+                        (
+                            timestamp,
+                            symbol,
+                            self.DATA_TYPE_OPTION,
+                            json_data,
+                            contract["expiration_date"],
+                            float(contract["strike"]),
+                            contract["option_type"],
+                            cached_at,
+                        ),
                     )
                     count += 1
 
@@ -463,7 +458,7 @@ class LocalFileCache:
 
         except (sqlite3.Error, TypeError) as e:
             logger.error(f"Cache write error for option contracts {symbol}: {e}")
-            raise CacheError(f"Failed to cache option contracts for {symbol}: {e}")
+            raise CacheError(f"Failed to cache option contracts for {symbol}: {e}") from e
 
     def get_option_contracts(
         self,
@@ -471,8 +466,8 @@ class LocalFileCache:
         expiration_date: Optional[str] = None,
         strike: Optional[float] = None,
         option_type: Optional[str] = None,
-        max_age_hours: Optional[float] = None
-    ) -> List[Dict[str, Any]]:
+        max_age_hours: Optional[float] = None,
+    ) -> list[dict[str, Any]]:
         """
         Retrieve option contracts.
 
@@ -498,7 +493,7 @@ class LocalFileCache:
                 FROM market_data
                 WHERE symbol = ? AND data_type = ?
             """
-            params: List[Any] = [symbol, self.DATA_TYPE_OPTION]
+            params: list[Any] = [symbol, self.DATA_TYPE_OPTION]
 
             if expiration_date:
                 query += " AND expiration_date = ?"
@@ -547,7 +542,7 @@ class LocalFileCache:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT count FROM api_usage WHERE service = ? AND date = ?",
-                ("alpha_vantage", today)
+                ("alpha_vantage", today),
             )
             row = cursor.fetchone()
 
@@ -572,14 +567,14 @@ class LocalFileCache:
                 VALUES (?, ?, 1)
                 ON CONFLICT(service, date) DO UPDATE SET count = count + 1
                 """,
-                ("alpha_vantage", today)
+                ("alpha_vantage", today),
             )
             conn.commit()
 
             # Get updated count
             cursor.execute(
                 "SELECT count FROM api_usage WHERE service = ? AND date = ?",
-                ("alpha_vantage", today)
+                ("alpha_vantage", today),
             )
             row = cursor.fetchone()
 
@@ -591,7 +586,7 @@ class LocalFileCache:
         self,
         symbol: Optional[str] = None,
         data_type: Optional[str] = None,
-        before_date: Optional[str] = None
+        before_date: Optional[str] = None,
     ) -> int:
         """
         Delete market data entries.
@@ -608,7 +603,7 @@ class LocalFileCache:
             cursor = conn.cursor()
 
             query = "DELETE FROM market_data WHERE 1=1"
-            params: List[Any] = []
+            params: list[Any] = []
 
             if symbol:
                 query += " AND symbol = ?"
@@ -649,7 +644,7 @@ class LocalFileCache:
             logger.info(f"Cleared {count} market data entries")
         return count
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get cache statistics.
 
@@ -682,7 +677,9 @@ class LocalFileCache:
             row = cursor.fetchone()
 
             # Database size
-            cursor.execute("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()")
+            cursor.execute(
+                "SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()"
+            )
             db_size = cursor.fetchone()["size"]
 
         return {
@@ -692,7 +689,7 @@ class LocalFileCache:
             "unique_symbols": symbol_count,
             "oldest_data": row["oldest"],
             "newest_data": row["newest"],
-            "database_size_bytes": db_size
+            "database_size_bytes": db_size,
         }
 
     def cleanup_expired(self, max_age_hours: float) -> int:
@@ -709,10 +706,7 @@ class LocalFileCache:
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM market_data WHERE cached_at < ?",
-                (cutoff_time,)
-            )
+            cursor.execute("DELETE FROM market_data WHERE cached_at < ?", (cutoff_time,))
             conn.commit()
             count = cursor.rowcount
 

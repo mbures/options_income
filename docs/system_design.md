@@ -926,8 +926,7 @@ python-dotenv>=1.0.0
 pytest>=7.4.0
 pytest-cov>=4.1.0
 pytest-mock>=3.11.1
-black>=23.7.0
-pylint>=2.17.5
+ruff>=0.4.0
 mypy>=1.5.0
 types-requests>=2.31.0
 ```
