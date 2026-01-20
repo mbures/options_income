@@ -8,261 +8,56 @@ This module provides tools for:
 - Generating strike recommendations based on risk profiles
 
 Formula Reference:
-    Strike at N sigma: K = S × exp(n × σ × √T)
+    Strike at N sigma: K = S x exp(n x sigma x sqrt(T))
     where:
         K = Strike price
         S = Current stock price
         n = Number of standard deviations (+ for calls, - for puts)
-        σ = Annualized volatility (as decimal, e.g., 0.30 for 30%)
+        sigma = Annualized volatility (as decimal, e.g., 0.30 for 30%)
         T = Time to expiration in years
 
 Assignment Probability (Black-Scholes):
-    For calls: P(ITM at expiry) ≈ N(d2)
-    For puts: P(ITM at expiry) ≈ N(-d2)
+    For calls: P(ITM at expiry) approx N(d2)
+    For puts: P(ITM at expiry) approx N(-d2)
     where:
-        d2 = [ln(S/K) + (r - σ²/2)T] / (σ√T)
+        d2 = [ln(S/K) + (r - sigma^2/2)T] / (sigma sqrt(T))
         N() = Standard normal CDF
 """
 
 import logging
 import math
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Optional
+from typing import Optional
 
-from .models import OptionContract, OptionsChain
+from .constants import (
+    DEFAULT_RISK_FREE_RATE,
+    MAX_BID_ASK_SPREAD_PCT,
+    MIN_OPEN_INTEREST,
+    STRIKE_INCREMENTS,
+)
+from .models import (
+    PROFILE_SIGMA_RANGES,
+    OptionsChain,
+    ProbabilityResult,
+    ProfileStrikesResult,
+    StrikeProfile,
+    StrikeRecommendation,
+    StrikeResult,
+)
 from .utils import calculate_days_to_expiry
 
 logger = logging.getLogger(__name__)
 
 
-class StrikeProfile(Enum):
-    """
-    Risk profile presets for strike selection.
-
-    Each profile defines a target sigma range. The corresponding P(ITM)
-    percentages are approximate and calibrated for typical 30-45 DTE options.
-
-    IMPORTANT: P(ITM) is highly dependent on days to expiration (DTE).
-    For short DTE (<14 days), the same sigma distance produces much lower
-    P(ITM) because there's less time for the stock to move. For example:
-    - At 30 DTE, 1.5σ might yield ~15% P(ITM)
-    - At 7 DTE, 1.5σ might yield ~5% P(ITM)
-
-    When selecting strikes, consider whether you want to target:
-    - Consistent sigma distance (volatility-adjusted distance from price)
-    - Consistent P(ITM) (which requires adjusting sigma based on DTE)
-    """
-
-    AGGRESSIVE = "aggressive"  # 0.5-1.0σ, ~30-40% P(ITM) at 30 DTE
-    MODERATE = "moderate"  # 1.0-1.5σ, ~15-30% P(ITM) at 30 DTE
-    CONSERVATIVE = "conservative"  # 1.5-2.0σ, ~7-15% P(ITM) at 30 DTE
-    DEFENSIVE = "defensive"  # 2.0-2.5σ, ~2-7% P(ITM) at 30 DTE
-
-
-# Sigma ranges for each profile (min_sigma, max_sigma)
-PROFILE_SIGMA_RANGES: dict[StrikeProfile, tuple] = {
-    StrikeProfile.AGGRESSIVE: (0.5, 1.0),
-    StrikeProfile.MODERATE: (1.0, 1.5),
-    StrikeProfile.CONSERVATIVE: (1.5, 2.0),
-    StrikeProfile.DEFENSIVE: (2.0, 2.5),
-}
-
-
-@dataclass
-class StrikeResult:
-    """
-    Result of a strike calculation.
-
-    Attributes:
-        theoretical_strike: Exact calculated strike at N sigma
-        tradeable_strike: Rounded to nearest available strike increment
-        sigma: Number of standard deviations from current price
-        current_price: Stock price used in calculation
-        volatility: Annualized volatility used (as decimal)
-        days_to_expiry: Days until option expiration
-        option_type: "call" or "put"
-        assignment_probability: Estimated probability of ITM at expiry
-    """
-
-    theoretical_strike: float
-    tradeable_strike: float
-    sigma: float
-    current_price: float
-    volatility: float
-    days_to_expiry: int
-    option_type: str
-    assignment_probability: Optional[float] = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "theoretical_strike": round(self.theoretical_strike, 4),
-            "tradeable_strike": self.tradeable_strike,
-            "sigma": self.sigma,
-            "current_price": self.current_price,
-            "volatility": round(self.volatility, 4),
-            "volatility_pct": round(self.volatility * 100, 2),
-            "days_to_expiry": self.days_to_expiry,
-            "option_type": self.option_type,
-            "assignment_probability": round(self.assignment_probability, 4)
-            if self.assignment_probability
-            else None,
-            "assignment_probability_pct": round(self.assignment_probability * 100, 2)
-            if self.assignment_probability
-            else None,
-        }
-
-
-@dataclass
-class ProbabilityResult:
-    """
-    Result of an assignment probability calculation.
-
-    Attributes:
-        probability: Probability of ITM at expiration (0-1)
-        d1: Black-Scholes d1 parameter
-        d2: Black-Scholes d2 parameter
-        delta: Option delta (instantaneous probability proxy)
-        strike: Strike price
-        current_price: Current stock price
-        volatility: Annualized volatility
-        time_to_expiry: Time to expiration in years
-        risk_free_rate: Risk-free interest rate used
-        option_type: "call" or "put"
-    """
-
-    probability: float
-    d1: float
-    d2: float
-    delta: float
-    strike: float
-    current_price: float
-    volatility: float
-    time_to_expiry: float
-    risk_free_rate: float
-    option_type: str
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "probability": round(self.probability, 4),
-            "probability_pct": round(self.probability * 100, 2),
-            "d1": round(self.d1, 4),
-            "d2": round(self.d2, 4),
-            "delta": round(self.delta, 4),
-            "strike": self.strike,
-            "current_price": self.current_price,
-            "volatility": round(self.volatility, 4),
-            "time_to_expiry_years": round(self.time_to_expiry, 4),
-            "risk_free_rate": round(self.risk_free_rate, 4),
-            "option_type": self.option_type,
-        }
-
-
-@dataclass
-class StrikeRecommendation:
-    """
-    A recommended strike with full analysis.
-
-    Attributes:
-        contract: The option contract (if available from chain)
-        strike: Strike price
-        expiration_date: Expiration date (YYYY-MM-DD)
-        option_type: "call" or "put"
-        sigma_distance: Distance from current price in sigmas
-        assignment_probability: Probability of ITM at expiry
-        bid: Bid price (premium receivable)
-        ask: Ask price
-        mid_price: Mid-point of bid/ask
-        bid_ask_spread_pct: Spread as percentage of mid price
-        open_interest: Open interest
-        volume: Daily volume
-        implied_volatility: Market IV for this strike
-        profile: StrikeProfile this recommendation fits
-        warnings: List of warning messages
-    """
-
-    contract: Optional[OptionContract]
-    strike: float
-    expiration_date: str
-    option_type: str
-    sigma_distance: float
-    assignment_probability: float
-    bid: Optional[float] = None
-    ask: Optional[float] = None
-    mid_price: Optional[float] = None
-    bid_ask_spread_pct: Optional[float] = None
-    open_interest: Optional[int] = None
-    volume: Optional[int] = None
-    implied_volatility: Optional[float] = None
-    profile: Optional[StrikeProfile] = None
-    warnings: list[str] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "strike": self.strike,
-            "expiration_date": self.expiration_date,
-            "option_type": self.option_type,
-            "sigma_distance": round(self.sigma_distance, 2),
-            "assignment_probability_pct": round(self.assignment_probability * 100, 2),
-            "bid": self.bid,
-            "ask": self.ask,
-            "mid_price": round(self.mid_price, 4) if self.mid_price else None,
-            "bid_ask_spread_pct": round(self.bid_ask_spread_pct, 2)
-            if self.bid_ask_spread_pct
-            else None,
-            "open_interest": self.open_interest,
-            "volume": self.volume,
-            "implied_volatility_pct": round(self.implied_volatility * 100, 2)
-            if self.implied_volatility
-            else None,
-            "profile": self.profile.value if self.profile else None,
-            "warnings": self.warnings,
-        }
-
-
-@dataclass
-class ProfileStrikesResult:
-    """
-    Result of calculating strikes for all risk profiles.
-
-    Contains the strikes for each profile plus any warnings about
-    issues like strike collisions or short DTE.
-
-    Attributes:
-        strikes: Dictionary mapping each StrikeProfile to its StrikeResult
-        warnings: List of warning messages about the calculation
-        collapsed_profiles: List of profile pairs that map to the same tradeable strike
-        is_short_dte: Whether DTE is considered short (<14 days)
-    """
-
-    strikes: dict[StrikeProfile, "StrikeResult"]
-    warnings: list[str] = field(default_factory=list)
-    collapsed_profiles: list[tuple] = field(default_factory=list)
-    is_short_dte: bool = False
-
-    def __getitem__(self, profile: StrikeProfile) -> "StrikeResult":
-        """Allow dict-like access for backward compatibility."""
-        return self.strikes[profile]
-
-    def __iter__(self):
-        """Allow iteration over profiles."""
-        return iter(self.strikes)
-
-    def items(self):
-        """Allow dict-like items() for backward compatibility."""
-        return self.strikes.items()
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "strikes": {p.value: r.to_dict() for p, r in self.strikes.items()},
-            "warnings": self.warnings,
-            "collapsed_profiles": [(p1.value, p2.value) for p1, p2 in self.collapsed_profiles],
-            "is_short_dte": self.is_short_dte,
-        }
+# Re-export models for backward compatibility
+__all__ = [
+    "StrikeOptimizer",
+    "StrikeProfile",
+    "PROFILE_SIGMA_RANGES",
+    "StrikeResult",
+    "ProbabilityResult",
+    "StrikeRecommendation",
+    "ProfileStrikesResult",
+]
 
 
 class StrikeOptimizer:
@@ -296,21 +91,11 @@ class StrikeOptimizer:
         )
     """
 
-    # Common strike increments by price range
-    STRIKE_INCREMENTS = {
-        (0, 5): 0.50,  # Stocks under $5: $0.50 increments
-        (5, 25): 0.50,  # $5-$25: $0.50 increments
-        (25, 200): 1.00,  # $25-$200: $1.00 increments
-        (200, 500): 2.50,  # $200-$500: $2.50 increments
-        (500, float("inf")): 5.00,  # Above $500: $5.00 increments
-    }
-
-    # Default risk-free rate (approximate current rate)
-    DEFAULT_RISK_FREE_RATE = 0.05
-
-    # Liquidity thresholds for recommendations
-    MIN_OPEN_INTEREST = 100
-    MAX_BID_ASK_SPREAD_PCT = 10.0  # 10% of mid price
+    # Class-level thresholds (for reference, actual values come from constants)
+    STRIKE_INCREMENTS = STRIKE_INCREMENTS
+    DEFAULT_RISK_FREE_RATE = DEFAULT_RISK_FREE_RATE
+    MIN_OPEN_INTEREST = MIN_OPEN_INTEREST
+    MAX_BID_ASK_SPREAD_PCT = MAX_BID_ASK_SPREAD_PCT
 
     def __init__(self, risk_free_rate: Optional[float] = None):
         """
@@ -333,7 +118,7 @@ class StrikeOptimizer:
         """
         Calculate the strike price at N standard deviations from current price.
 
-        Uses the formula: K = S × exp(n × σ × √T)
+        Uses the formula: K = S x exp(n x sigma x sqrt(T))
 
         For calls (positive n): Strike is ABOVE current price (OTM call)
         For puts (negative n): Strike is BELOW current price (OTM put)
@@ -375,7 +160,7 @@ class StrikeOptimizer:
         # Calculate time to expiry in years
         time_to_expiry = days_to_expiry / 365.0
 
-        # Calculate theoretical strike: K = S × exp(n × σ × √T)
+        # Calculate theoretical strike: K = S x exp(n x sigma x sqrt(T))
         theoretical_strike = current_price * math.exp(n * volatility * math.sqrt(time_to_expiry))
 
         # Round to tradeable strike if requested
@@ -396,7 +181,7 @@ class StrikeOptimizer:
         )
 
         logger.info(
-            f"Calculated {sigma}σ {option_type} strike: "
+            f"Calculated {sigma}sigma {option_type} strike: "
             f"theoretical=${theoretical_strike:.2f}, tradeable=${tradeable_strike:.2f}, "
             f"P(ITM)={prob_result.probability * 100:.1f}%"
         )
@@ -496,7 +281,7 @@ class StrikeOptimizer:
         - For calls: P(ITM) = N(d2)
         - For puts: P(ITM) = N(-d2)
 
-        where d2 = [ln(S/K) + (r - σ²/2)T] / (σ√T)
+        where d2 = [ln(S/K) + (r - sigma^2/2)T] / (sigma sqrt(T))
 
         Note: This assumes log-normal price distribution and is a theoretical
         estimate. Actual assignment probability may differ due to early
@@ -585,7 +370,7 @@ class StrikeOptimizer:
         Calculate how many sigmas a strike is from the current price.
 
         Inverse of calculate_strike_at_sigma:
-        n = ln(K/S) / (σ × √T)
+        n = ln(K/S) / (sigma x sqrt(T))
 
         Args:
             strike: Strike price
@@ -795,7 +580,7 @@ class StrikeOptimizer:
         recommendations.sort(
             key=lambda r: (
                 profile_priority.get(r.profile, 4),
-                abs(r.sigma_distance - 1.5),  # Prefer strikes near 1.5σ (moderate)
+                abs(r.sigma_distance - 1.5),  # Prefer strikes near 1.5sigma (moderate)
             )
         )
 

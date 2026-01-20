@@ -14,7 +14,8 @@ The scanner is designed for a broker-first workflow where the system generates
 recommendations and the user executes trades manually at their broker.
 
 Example:
-    from src.overlay_scanner import OverlayScanner, PortfolioHolding, ScannerConfig
+    from src.overlay_scanner import OverlayScanner
+    from src.models import PortfolioHolding, ScannerConfig
 
     holdings = [
         PortfolioHolding(symbol="AAPL", shares=500),
@@ -31,613 +32,49 @@ Example:
 """
 
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from enum import Enum
+from datetime import datetime
 from typing import Any, Optional
 
-from .models import OptionContract, OptionsChain
+from .earnings_calendar import EarningsCalendar
+from .models import (
+    DELTA_BAND_RANGES,
+    BrokerChecklist,
+    CandidateStrike,
+    DeltaBand,
+    ExecutionCostEstimate,
+    LLMMemoPayload,
+    OptionsChain,
+    PortfolioHolding,
+    RejectionDetail,
+    RejectionReason,
+    ScannerConfig,
+    ScanResult,
+    SlippageModel,
+)
 from .strike_optimizer import StrikeOptimizer
 from .utils import calculate_days_to_expiry
 
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# Data Models
-# =============================================================================
-
-
-class DeltaBand(Enum):
-    """
-    Delta-band risk profiles for weekly covered call selection.
-
-    Delta bands are the PRIMARY selector for weekly covered calls as they
-    provide a direct measure of ITM probability/risk. Lower delta = lower
-    assignment probability.
-
-    These bands are calibrated for weekly options (5-14 DTE).
-    """
-
-    DEFENSIVE = "defensive"  # 0.05-0.10 delta, ~5-10% P(ITM)
-    CONSERVATIVE = "conservative"  # 0.10-0.15 delta, ~10-15% P(ITM)
-    MODERATE = "moderate"  # 0.15-0.25 delta, ~15-25% P(ITM)
-    AGGRESSIVE = "aggressive"  # 0.25-0.35 delta, ~25-35% P(ITM)
-
-
-# Delta ranges for each band (min_delta, max_delta)
-DELTA_BAND_RANGES: dict[DeltaBand, tuple[float, float]] = {
-    DeltaBand.DEFENSIVE: (0.05, 0.10),
-    DeltaBand.CONSERVATIVE: (0.10, 0.15),
-    DeltaBand.MODERATE: (0.15, 0.25),
-    DeltaBand.AGGRESSIVE: (0.25, 0.35),
-}
-
-
-class SlippageModel(Enum):
-    """
-    Slippage models for execution cost estimation.
-
-    Slippage represents the difference between expected fill price
-    and actual fill price.
-    """
-
-    HALF_SPREAD = "half_spread"  # Assume fill at mid
-    HALF_SPREAD_CAPPED = "half_spread_capped"  # Half spread, capped at max
-    FULL_SPREAD = "full_spread"  # Assume fill at bid (worst case)
-    NONE = "none"  # No slippage (optimistic)
-
-
-class RejectionReason(Enum):
-    """
-    Reasons for rejecting a strike from recommendations.
-
-    Explicit rejection reasons help users understand why certain
-    strikes were excluded from the top recommendations.
-    """
-
-    ZERO_BID = "zero_bid"
-    LOW_PREMIUM = "low_premium"
-    WIDE_SPREAD_ABSOLUTE = "wide_spread_absolute"
-    WIDE_SPREAD_RELATIVE = "wide_spread_relative"
-    LOW_OPEN_INTEREST = "low_open_interest"
-    LOW_VOLUME = "low_volume"
-    EARNINGS_WEEK = "earnings_week"
-    OUTSIDE_DELTA_BAND = "outside_delta_band"
-    INSUFFICIENT_SHARES = "insufficient_shares"
-    ITM_STRIKE = "itm_strike"
-    NET_CREDIT_TOO_LOW = "net_credit_too_low"  # Deprecated: use YIELD_TOO_LOW
-    YIELD_TOO_LOW = "yield_too_low"  # net_credit / notional < min_weekly_yield_bps
-    FRICTION_TOO_HIGH = "friction_too_high"  # net_credit < min_friction_multiple * costs
-    EARLY_EXERCISE_RISK = "early_exercise_risk"
-
-
-@dataclass
-class RejectionDetail:
-    """
-    Detailed rejection information with margin tracking.
-
-    Tracks not just why a candidate was rejected, but how close it was
-    to passing each constraint. This enables near-miss analysis.
-
-    Attributes:
-        reason: The rejection reason enum
-        actual_value: The candidate's actual value for this constraint
-        threshold: The threshold that needed to be met
-        margin: How far from passing (normalized 0-1, 0 = at threshold)
-        margin_display: Human-readable margin description
-    """
-
-    reason: RejectionReason
-    actual_value: float
-    threshold: float
-    margin: float  # 0 = at threshold, 1 = far from threshold
-    margin_display: str
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "reason": self.reason.value,
-            "actual_value": round(self.actual_value, 4),
-            "threshold": round(self.threshold, 4),
-            "margin": round(self.margin, 4),
-            "margin_display": self.margin_display,
-        }
-
-
-@dataclass
-class PortfolioHolding:
-    """
-    Represents a single portfolio holding.
-
-    Attributes:
-        symbol: Stock ticker symbol (required)
-        shares: Number of shares held (required, must be non-negative)
-        cost_basis: Average cost per share (optional, for tax analytics)
-        acquired_date: Date shares were acquired (optional, for holding period)
-        account_type: 'taxable' or 'qualified' (optional, affects warnings)
-    """
-
-    symbol: str
-    shares: int
-    cost_basis: Optional[float] = None
-    acquired_date: Optional[str] = None  # ISO format YYYY-MM-DD
-    account_type: Optional[str] = None  # 'taxable' or 'qualified'
-
-    def __post_init__(self) -> None:
-        """Validate holding data."""
-        self.symbol = self.symbol.upper().strip()
-        if not self.symbol or not self.symbol.isalnum():
-            raise ValueError(f"Invalid symbol: {self.symbol}")
-        if self.shares < 0:
-            raise ValueError(f"Shares must be non-negative, got {self.shares}")
-        if self.cost_basis is not None and self.cost_basis < 0:
-            raise ValueError(f"Cost basis must be non-negative, got {self.cost_basis}")
-        if self.account_type and self.account_type not in ("taxable", "qualified"):
-            raise ValueError(
-                f"Account type must be 'taxable' or 'qualified', got {self.account_type}"
-            )
-
-
-@dataclass
-class ScannerConfig:
-    """
-    Configuration for the overlay scanner.
-
-    Attributes:
-        overwrite_cap_pct: Max percentage of shares to overwrite (default 25%)
-        per_contract_fee: Broker fee per contract (default $0.65)
-        slippage_model: How to estimate fill price (default: half_spread_capped)
-        max_slippage_per_contract: Cap on slippage estimate (default $0.10/share)
-        min_weekly_yield_bps: Minimum yield in basis points per week (default 10 bps).
-            Yield = net_credit / (spot * 100) per contract. This scales across
-            stock prices: 10 bps on $10 stock = $0.10, on $300 stock = $3.00.
-        min_friction_multiple: Net credit must be >= this multiple of friction costs
-            (default 2.0). Friction = commission + slippage. Prevents trading
-            where costs consume most of the premium.
-        skip_earnings_default: Exclude earnings-week expirations (default True)
-        delta_band: Target delta band for selection (default CONSERVATIVE)
-        min_open_interest: Minimum OI for tradability (default 100)
-        min_volume: Minimum daily volume (default 10)
-        max_spread_absolute: Maximum bid-ask spread in dollars (default $0.10)
-            PRIMARY spread gate - applies to all contracts
-        max_spread_relative_pct: Maximum spread as % of mid (default 20%)
-            SECONDARY spread gate - only applies when mid >= min_mid_for_relative_spread
-        min_mid_for_relative_spread: Minimum mid price before relative spread filter
-            applies (default $0.50). For low-premium weeklies, percentage spreads
-            are misleading due to tick size constraints.
-        min_bid_price: Minimum bid price to consider (default $0.05)
-        weeks_to_scan: Number of weekly expirations to scan (default 3)
-    """
-
-    overwrite_cap_pct: float = 25.0
-    per_contract_fee: float = 0.65
-    slippage_model: SlippageModel = SlippageModel.HALF_SPREAD_CAPPED
-    max_slippage_per_contract: float = 0.10  # $0.10 per share = $10 per contract
-    min_weekly_yield_bps: float = 10.0  # 10 bps = 0.10% per week (~5% annualized)
-    min_friction_multiple: float = 2.0  # net_credit >= 2x (commission + slippage)
-    skip_earnings_default: bool = True
-    delta_band: DeltaBand = DeltaBand.CONSERVATIVE
-    min_open_interest: int = 100
-    min_volume: int = 10
-    max_spread_absolute: float = 0.10  # $0.10 = 10 ticks, reasonable for most options
-    max_spread_relative_pct: float = 20.0  # Only checked when mid >= min_mid_for_relative_spread
-    min_mid_for_relative_spread: float = 0.50  # Don't apply % spread to tiny premiums
-    min_bid_price: float = 0.05
-    weeks_to_scan: int = 3
-    risk_free_rate: float = 0.05
-
-    def __post_init__(self) -> None:
-        """Validate configuration."""
-        if not 0 < self.overwrite_cap_pct <= 100:
-            raise ValueError(
-                f"overwrite_cap_pct must be between 0 and 100, got {self.overwrite_cap_pct}"
-            )
-        if self.per_contract_fee < 0:
-            raise ValueError(f"per_contract_fee must be non-negative, got {self.per_contract_fee}")
-        if self.min_weekly_yield_bps < 0:
-            raise ValueError(
-                f"min_weekly_yield_bps must be non-negative, got {self.min_weekly_yield_bps}"
-            )
-        if self.min_friction_multiple < 1:
-            raise ValueError(
-                f"min_friction_multiple must be >= 1, got {self.min_friction_multiple}"
-            )
-
-
-@dataclass
-class ExecutionCostEstimate:
-    """
-    Estimated execution costs for a trade.
-
-    Attributes:
-        gross_premium: Bid price × 100 (premium before costs)
-        commission: Broker fee per contract
-        slippage: Estimated slippage cost
-        net_credit: Gross premium - commission - slippage
-        net_credit_per_share: Net credit / 100
-    """
-
-    gross_premium: float
-    commission: float
-    slippage: float
-    net_credit: float
-    net_credit_per_share: float
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "gross_premium": round(self.gross_premium, 2),
-            "commission": round(self.commission, 2),
-            "slippage": round(self.slippage, 2),
-            "net_credit": round(self.net_credit, 2),
-            "net_credit_per_share": round(self.net_credit_per_share, 4),
-        }
-
-
-@dataclass
-class CandidateStrike:
-    """
-    A candidate strike for covered call overlay.
-
-    Attributes:
-        contract: The option contract
-        strike: Strike price
-        expiration_date: Expiration date (YYYY-MM-DD)
-        delta: Option delta (computed via Black-Scholes)
-        p_itm: Probability of ITM at expiration
-        sigma_distance: Distance from current price in sigmas (diagnostic)
-        bid: Bid price
-        ask: Ask price
-        mid_price: Mid-point of bid/ask
-        spread_absolute: Bid-ask spread in dollars
-        spread_relative_pct: Spread as % of mid
-        open_interest: Open interest
-        volume: Daily volume
-        cost_estimate: Execution cost estimate
-        delta_band: Which delta band this strike falls into
-        contracts_to_sell: Number of contracts based on overwrite cap
-        total_net_credit: Net credit for all contracts
-        annualized_yield_pct: Simple annualized yield (net credit / position value)
-        days_to_expiry: Days until expiration
-        warnings: List of warning messages
-        rejection_reasons: List of rejection reasons (if filtered out)
-        is_recommended: Whether this strike passed all filters
-    """
-
-    contract: OptionContract
-    strike: float
-    expiration_date: str
-    delta: float
-    p_itm: float
-    sigma_distance: Optional[float]
-    bid: float
-    ask: float
-    mid_price: float
-    spread_absolute: float
-    spread_relative_pct: float
-    open_interest: int
-    volume: int
-    cost_estimate: ExecutionCostEstimate
-    delta_band: Optional[DeltaBand]
-    contracts_to_sell: int
-    total_net_credit: float
-    annualized_yield_pct: float
-    days_to_expiry: int
-    warnings: list[str] = field(default_factory=list)
-    rejection_reasons: list[RejectionReason] = field(default_factory=list)
-    rejection_details: list["RejectionDetail"] = field(default_factory=list)
-    binding_constraint: Optional["RejectionDetail"] = None
-    near_miss_score: float = 0.0
-    is_recommended: bool = True
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "strike": self.strike,
-            "expiration_date": self.expiration_date,
-            "delta": round(self.delta, 4),
-            "p_itm_pct": round(self.p_itm * 100, 2),
-            "sigma_distance": round(self.sigma_distance, 2) if self.sigma_distance else None,
-            "bid": round(self.bid, 2),
-            "ask": round(self.ask, 2),
-            "mid_price": round(self.mid_price, 2),
-            "spread_absolute": round(self.spread_absolute, 2),
-            "spread_relative_pct": round(self.spread_relative_pct, 2),
-            "open_interest": self.open_interest,
-            "volume": self.volume,
-            "cost_estimate": self.cost_estimate.to_dict(),
-            "delta_band": self.delta_band.value if self.delta_band else None,
-            "contracts_to_sell": self.contracts_to_sell,
-            "total_net_credit": round(self.total_net_credit, 2),
-            "annualized_yield_pct": round(self.annualized_yield_pct, 2),
-            "days_to_expiry": self.days_to_expiry,
-            "warnings": self.warnings,
-            "rejection_reasons": [r.value for r in self.rejection_reasons],
-            "rejection_details": [d.to_dict() for d in self.rejection_details],
-            "binding_constraint": self.binding_constraint.to_dict()
-            if self.binding_constraint
-            else None,
-            "near_miss_score": round(self.near_miss_score, 4),
-            "is_recommended": self.is_recommended,
-        }
-
-
-@dataclass
-class BrokerChecklist:
-    """
-    Per-trade broker checklist for verification before execution.
-
-    This checklist should be reviewed at the broker before placing the trade.
-
-    Attributes:
-        symbol: Stock symbol
-        action: Trade action (e.g., "SELL TO OPEN")
-        contracts: Number of contracts
-        strike: Strike price
-        expiration: Expiration date
-        option_type: "CALL" or "PUT"
-        limit_price: Suggested limit price (mid or slightly below)
-        min_acceptable_credit: Minimum credit to accept (bid)
-        checks: List of verification items
-        warnings: List of warnings to review
-    """
-
-    symbol: str
-    action: str
-    contracts: int
-    strike: float
-    expiration: str
-    option_type: str
-    limit_price: float
-    min_acceptable_credit: float
-    checks: list[str]
-    warnings: list[str]
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "symbol": self.symbol,
-            "action": self.action,
-            "contracts": self.contracts,
-            "strike": self.strike,
-            "expiration": self.expiration,
-            "option_type": self.option_type,
-            "limit_price": round(self.limit_price, 2),
-            "min_acceptable_credit": round(self.min_acceptable_credit, 2),
-            "checks": self.checks,
-            "warnings": self.warnings,
-        }
-
-
-@dataclass
-class LLMMemoPayload:
-    """
-    Structured JSON payload for optional LLM decision memo generation.
-
-    This payload contains all relevant data for an LLM to generate
-    a human-readable decision memo explaining the trade rationale.
-
-    Attributes:
-        symbol: Stock symbol
-        current_price: Current stock price
-        shares_held: Total shares in portfolio
-        contracts_to_write: Number of contracts to sell
-        candidate: The recommended strike candidate
-        holding: Portfolio holding info
-        risk_profile: Delta band used
-        earnings_status: Whether earnings are clear
-        dividend_status: Dividend verification status
-        account_type: Taxable vs qualified
-        timestamp: When this memo was generated
-    """
-
-    symbol: str
-    current_price: float
-    shares_held: int
-    contracts_to_write: int
-    candidate: dict[str, Any]
-    holding: dict[str, Any]
-    risk_profile: str
-    earnings_status: str
-    dividend_status: str
-    account_type: Optional[str]
-    timestamp: str
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "symbol": self.symbol,
-            "current_price": round(self.current_price, 2),
-            "shares_held": self.shares_held,
-            "contracts_to_write": self.contracts_to_write,
-            "candidate": self.candidate,
-            "holding": self.holding,
-            "risk_profile": self.risk_profile,
-            "earnings_status": self.earnings_status,
-            "dividend_status": self.dividend_status,
-            "account_type": self.account_type,
-            "timestamp": self.timestamp,
-        }
-
-
-@dataclass
-class ScanResult:
-    """
-    Result of scanning a single holding.
-
-    Attributes:
-        symbol: Stock symbol
-        current_price: Current stock price
-        shares_held: Total shares held
-        contracts_available: Max contracts based on overwrite cap
-        recommended_strikes: List of recommended strikes (passed all filters)
-        rejected_strikes: List of rejected strikes with reasons
-        near_miss_candidates: Top 5 rejected candidates by near-miss score
-        earnings_dates: Earnings dates found
-        has_earnings_conflict: Whether any expiration spans earnings
-        broker_checklist: Checklist for the top recommendation
-        llm_memo_payload: Payload for LLM memo generation
-        warnings: General warnings
-        error: Error message if scan failed
-    """
-
-    symbol: str
-    current_price: float
-    shares_held: int
-    contracts_available: int
-    recommended_strikes: list[CandidateStrike] = field(default_factory=list)
-    rejected_strikes: list[CandidateStrike] = field(default_factory=list)
-    near_miss_candidates: list[CandidateStrike] = field(default_factory=list)
-    earnings_dates: list[str] = field(default_factory=list)
-    has_earnings_conflict: bool = False
-    broker_checklist: Optional[BrokerChecklist] = None
-    llm_memo_payload: Optional[LLMMemoPayload] = None
-    warnings: list[str] = field(default_factory=list)
-    error: Optional[str] = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "symbol": self.symbol,
-            "current_price": round(self.current_price, 2),
-            "shares_held": self.shares_held,
-            "contracts_available": self.contracts_available,
-            "recommended_strikes": [s.to_dict() for s in self.recommended_strikes],
-            "rejected_strikes": [s.to_dict() for s in self.rejected_strikes],
-            "near_miss_candidates": [s.to_dict() for s in self.near_miss_candidates],
-            "earnings_dates": self.earnings_dates,
-            "has_earnings_conflict": self.has_earnings_conflict,
-            "broker_checklist": self.broker_checklist.to_dict() if self.broker_checklist else None,
-            "llm_memo_payload": self.llm_memo_payload.to_dict() if self.llm_memo_payload else None,
-            "warnings": self.warnings,
-            "error": self.error,
-        }
-
-
-# =============================================================================
-# Earnings Calendar Cache
-# =============================================================================
-
-
-class EarningsCalendar:
-    """
-    Cached earnings calendar for earnings week exclusion.
-
-    Fetches and caches earnings dates from Finnhub for efficient
-    repeated lookups.
-    """
-
-    def __init__(self, finnhub_client: Any, cache_ttl_hours: int = 24):
-        """
-        Initialize earnings calendar.
-
-        Args:
-            finnhub_client: FinnhubClient instance for API calls
-            cache_ttl_hours: Cache time-to-live in hours (default 24)
-        """
-        self._client = finnhub_client
-        self._cache: dict[str, tuple[list[str], float]] = {}
-        self._cache_ttl = cache_ttl_hours * 3600
-
-    def get_earnings_dates(
-        self, symbol: str, from_date: Optional[str] = None, to_date: Optional[str] = None
-    ) -> list[str]:
-        """
-        Get earnings dates for a symbol within date range.
-
-        Args:
-            symbol: Stock ticker symbol
-            from_date: Start date (YYYY-MM-DD), default today
-            to_date: End date (YYYY-MM-DD), default +60 days
-
-        Returns:
-            List of earnings dates (YYYY-MM-DD format)
-        """
-        symbol = symbol.upper()
-
-        # Check cache
-        cache_key = symbol
-        if cache_key in self._cache:
-            dates, cached_at = self._cache[cache_key]
-            if (datetime.now().timestamp() - cached_at) < self._cache_ttl:
-                logger.debug(f"Cache hit for {symbol} earnings dates")
-                return dates
-
-        # Set default date range
-        now = datetime.now()
-        if from_date is None:
-            from_date = now.strftime("%Y-%m-%d")
-        if to_date is None:
-            to_date = (now + timedelta(days=60)).strftime("%Y-%m-%d")
-
-        # Fetch from Finnhub
-        try:
-            earnings_dates = self._fetch_earnings_from_finnhub(symbol, from_date, to_date)
-            # Cache the results
-            self._cache[cache_key] = (earnings_dates, datetime.now().timestamp())
-            logger.info(f"Fetched {len(earnings_dates)} earnings dates for {symbol}")
-            return earnings_dates
-        except Exception as e:
-            logger.warning(f"Failed to fetch earnings for {symbol}: {e}")
-            return []
-
-    def _fetch_earnings_from_finnhub(self, symbol: str, from_date: str, to_date: str) -> list[str]:
-        """
-        Fetch earnings dates from Finnhub API via FinnhubClient.
-
-        Args:
-            symbol: Stock ticker symbol
-            from_date: Start date (YYYY-MM-DD)
-            to_date: End date (YYYY-MM-DD)
-
-        Returns:
-            List of earnings dates (YYYY-MM-DD format)
-        """
-        return self._client.get_earnings_calendar(symbol, from_date, to_date)
-
-    def expiration_spans_earnings(
-        self, symbol: str, expiration_date: str
-    ) -> tuple[bool, Optional[str]]:
-        """
-        Check if an expiration date spans an earnings announcement.
-
-        Args:
-            symbol: Stock ticker symbol
-            expiration_date: Option expiration date (YYYY-MM-DD)
-
-        Returns:
-            Tuple of (spans_earnings: bool, earnings_date: str or None)
-        """
-        now = datetime.now()
-        try:
-            exp_dt = datetime.fromisoformat(expiration_date)
-        except ValueError:
-            return False, None
-
-        earnings_dates = self.get_earnings_dates(symbol)
-
-        for earn_date in earnings_dates:
-            try:
-                earn_dt = datetime.fromisoformat(earn_date)
-                if now <= earn_dt <= exp_dt:
-                    return True, earn_date
-            except ValueError:
-                continue
-
-        return False, None
-
-    def clear_cache(self, symbol: Optional[str] = None) -> None:
-        """Clear cache for symbol or all symbols."""
-        if symbol:
-            self._cache.pop(symbol.upper(), None)
-        else:
-            self._cache.clear()
-
-
-# =============================================================================
-# Overlay Scanner
-# =============================================================================
+# Re-export commonly used types for backward compatibility
+__all__ = [
+    "OverlayScanner",
+    "EarningsCalendar",
+    # Models (re-exported for convenience)
+    "DeltaBand",
+    "DELTA_BAND_RANGES",
+    "SlippageModel",
+    "RejectionReason",
+    "RejectionDetail",
+    "PortfolioHolding",
+    "ScannerConfig",
+    "ExecutionCostEstimate",
+    "CandidateStrike",
+    "BrokerChecklist",
+    "LLMMemoPayload",
+    "ScanResult",
+]
 
 
 class OverlayScanner:
@@ -697,7 +134,7 @@ class OverlayScanner:
         """
         Calculate number of contracts to sell based on overwrite cap.
 
-        Formula: floor(shares × overwrite_cap_pct / 100 / 100)
+        Formula: floor(shares x overwrite_cap_pct / 100 / 100)
 
         If result is 0, the holding is non-actionable.
 
@@ -899,8 +336,6 @@ class OverlayScanner:
             )
 
         # Spread relative filter (SECONDARY - only for mid >= threshold)
-        # For low-premium weeklies, percentage spreads are misleading due to tick constraints
-        # A $0.02 spread on $0.07 mid looks like 29% but is only 2 ticks - perfectly tradeable
         if candidate.mid_price >= self.config.min_mid_for_relative_spread:
             if candidate.spread_relative_pct > self.config.max_spread_relative_pct:
                 margin, display = self._calculate_margin(
@@ -950,13 +385,9 @@ class OverlayScanner:
             )
 
         # Yield-based filter: net_credit / notional >= min_weekly_yield_bps
-        # This scales across stock prices: 10 bps on $10 stock = $0.10, on $300 stock = $3.00
         if current_price > 0:
-            # Per-contract notional = spot * 100
             notional_per_contract = current_price * 100
-            # Per-contract net credit
             net_credit_per_contract = candidate.cost_estimate.net_credit
-            # Yield in basis points
             actual_yield_bps = (net_credit_per_contract / notional_per_contract) * 10000
 
             if actual_yield_bps < self.config.min_weekly_yield_bps:
@@ -978,7 +409,6 @@ class OverlayScanner:
                 )
 
         # Friction floor: net_credit >= min_friction_multiple * (commission + slippage)
-        # Prevents trading where costs consume most of the premium
         friction_cost = candidate.cost_estimate.commission + candidate.cost_estimate.slippage
         min_credit_for_friction = self.config.min_friction_multiple * friction_cost
         net_credit = candidate.cost_estimate.net_credit
@@ -1060,7 +490,7 @@ class OverlayScanner:
 
         # Rejection count component (0-0.2): fewer rejections = better
         num_rejections = len(candidate.rejection_details)
-        rejection_penalty = max(0, 1.0 - (num_rejections - 1) * 0.25)  # 1 rejection = 1.0, 5+ = 0
+        rejection_penalty = max(0, 1.0 - (num_rejections - 1) * 0.25)
         rejection_score = rejection_penalty * 0.2
 
         # Minimum margin component (0-0.2): smaller margin = closer to passing
@@ -1116,7 +546,7 @@ class OverlayScanner:
             f"Verify current bid >= ${candidate.bid:.2f}",
             f"Verify spread <= ${self.config.max_spread_absolute:.2f} or {self.config.max_spread_relative_pct:.0f}%",
             f"Verify open interest >= {self.config.min_open_interest}",
-            f"Confirm {candidate.contracts_to_sell} contracts × ${candidate.strike} strike",
+            f"Confirm {candidate.contracts_to_sell} contracts x ${candidate.strike} strike",
             f"Expected net credit: ${candidate.total_net_credit:.2f}",
         ]
 
@@ -1399,7 +829,7 @@ class OverlayScanner:
                 symbol=symbol,
                 candidate=top,
                 earnings_clear=earnings_clear,
-                dividend_verified=False,  # TODO: Add dividend checking
+                dividend_verified=False,
             )
 
             earnings_status = "CLEAR" if earnings_clear else "UNVERIFIED"
