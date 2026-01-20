@@ -693,6 +693,87 @@ class TestTradabilityFilters:
         assert len(reasons) == 0
         assert len(details) == 0
 
+    def test_low_premium_weekly_relative_spread_skipped(self, scanner, sample_option_contract):
+        """Test that relative spread filter is skipped for low-premium weeklies.
+
+        For low-priced underlyings like F (~$10), weekly premiums are tiny.
+        A $0.02 spread on $0.07 mid = 28% relative spread, but that's just
+        2 ticks - perfectly tradeable. The relative spread filter should only
+        apply when mid >= min_mid_for_relative_spread (default $0.50).
+        """
+        cost = ExecutionCostEstimate(
+            gross_premium=6.00, commission=0.65, slippage=1.0,
+            net_credit=4.35, net_credit_per_share=0.0435
+        )
+        # Low-premium weekly: $0.06 bid, $0.08 ask, $0.07 mid
+        # Spread = $0.02 (2 ticks), but 28.6% relative - should NOT trigger
+        candidate = CandidateStrike(
+            contract=sample_option_contract,
+            strike=14.00,
+            expiration_date=sample_option_contract.expiration_date,
+            delta=0.12,
+            p_itm=0.12,
+            sigma_distance=1.5,
+            bid=0.06,
+            ask=0.08,
+            mid_price=0.07,  # Below $0.50 threshold
+            spread_absolute=0.02,  # 2 ticks - tight spread
+            spread_relative_pct=28.6,  # High % but meaningless for tiny premiums
+            open_interest=5000,
+            volume=500,
+            cost_estimate=cost,
+            delta_band=DeltaBand.CONSERVATIVE,
+            contracts_to_sell=1,
+            total_net_credit=4.35,
+            annualized_yield_pct=2.0,
+            days_to_expiry=7
+        )
+
+        reasons, details = scanner.apply_tradability_filters(candidate)
+
+        # Should NOT have WIDE_SPREAD_RELATIVE because mid < $0.50
+        assert RejectionReason.WIDE_SPREAD_RELATIVE not in reasons
+        assert not any(d.reason == RejectionReason.WIDE_SPREAD_RELATIVE for d in details)
+        # Should NOT have WIDE_SPREAD_ABSOLUTE because $0.02 < $0.10
+        assert RejectionReason.WIDE_SPREAD_ABSOLUTE not in reasons
+
+    def test_higher_premium_relative_spread_checked(self, scanner, sample_option_contract):
+        """Test that relative spread filter applies when mid >= threshold."""
+        cost = ExecutionCostEstimate(
+            gross_premium=80.0, commission=0.65, slippage=5.0,
+            net_credit=74.35, net_credit_per_share=0.7435
+        )
+        # Higher premium: $0.80 bid, $1.00 ask, $0.90 mid
+        # Spread = $0.20 (absolute OK), but 22% relative - should trigger
+        candidate = CandidateStrike(
+            contract=sample_option_contract,
+            strike=190.00,
+            expiration_date=sample_option_contract.expiration_date,
+            delta=0.12,
+            p_itm=0.12,
+            sigma_distance=1.5,
+            bid=0.80,
+            ask=1.00,
+            mid_price=0.90,  # Above $0.50 threshold
+            spread_absolute=0.20,  # At absolute limit, should not trigger
+            spread_relative_pct=22.2,  # Above 20% threshold
+            open_interest=5000,
+            volume=500,
+            cost_estimate=cost,
+            delta_band=DeltaBand.CONSERVATIVE,
+            contracts_to_sell=1,
+            total_net_credit=74.35,
+            annualized_yield_pct=4.0,
+            days_to_expiry=7
+        )
+
+        reasons, details = scanner.apply_tradability_filters(candidate)
+
+        # SHOULD have WIDE_SPREAD_RELATIVE because mid >= $0.50 and spread% > 20%
+        assert RejectionReason.WIDE_SPREAD_RELATIVE in reasons
+        rel_detail = next(d for d in details if d.reason == RejectionReason.WIDE_SPREAD_RELATIVE)
+        assert "mid=$0.90" in rel_detail.margin_display
+
 
 # =============================================================================
 # Earnings Calendar Tests

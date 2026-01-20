@@ -185,8 +185,13 @@ class ScannerConfig:
         delta_band: Target delta band for selection (default CONSERVATIVE)
         min_open_interest: Minimum OI for tradability (default 100)
         min_volume: Minimum daily volume (default 10)
-        max_spread_absolute: Maximum bid-ask spread in dollars (default $0.20)
-        max_spread_relative_pct: Maximum spread as % of mid (default 15%)
+        max_spread_absolute: Maximum bid-ask spread in dollars (default $0.10)
+            PRIMARY spread gate - applies to all contracts
+        max_spread_relative_pct: Maximum spread as % of mid (default 20%)
+            SECONDARY spread gate - only applies when mid >= min_mid_for_relative_spread
+        min_mid_for_relative_spread: Minimum mid price before relative spread filter
+            applies (default $0.50). For low-premium weeklies, percentage spreads
+            are misleading due to tick size constraints.
         min_bid_price: Minimum bid price to consider (default $0.05)
         weeks_to_scan: Number of weekly expirations to scan (default 3)
     """
@@ -199,8 +204,9 @@ class ScannerConfig:
     delta_band: DeltaBand = DeltaBand.CONSERVATIVE
     min_open_interest: int = 100
     min_volume: int = 10
-    max_spread_absolute: float = 0.20
-    max_spread_relative_pct: float = 15.0
+    max_spread_absolute: float = 0.10  # $0.10 = 10 ticks, reasonable for most options
+    max_spread_relative_pct: float = 20.0  # Only checked when mid >= min_mid_for_relative_spread
+    min_mid_for_relative_spread: float = 0.50  # Don't apply % spread to tiny premiums
     min_bid_price: float = 0.05
     weeks_to_scan: int = 3
     risk_free_rate: float = 0.05
@@ -855,7 +861,7 @@ class OverlayScanner:
                 margin_display=f"bid={display}"
             ))
 
-        # Spread absolute filter
+        # Spread absolute filter (PRIMARY - always checked)
         if candidate.spread_absolute > self.config.max_spread_absolute:
             margin, display = self._calculate_margin(
                 candidate.spread_absolute, self.config.max_spread_absolute, 'max'
@@ -866,22 +872,25 @@ class OverlayScanner:
                 actual_value=candidate.spread_absolute,
                 threshold=self.config.max_spread_absolute,
                 margin=margin,
-                margin_display=f"spread={display}"
+                margin_display=f"spread=${candidate.spread_absolute:.2f} vs ${self.config.max_spread_absolute:.2f}"
             ))
 
-        # Spread relative filter
-        if candidate.spread_relative_pct > self.config.max_spread_relative_pct:
-            margin, display = self._calculate_margin(
-                candidate.spread_relative_pct, self.config.max_spread_relative_pct, 'max'
-            )
-            reasons.append(RejectionReason.WIDE_SPREAD_RELATIVE)
-            details.append(RejectionDetail(
-                reason=RejectionReason.WIDE_SPREAD_RELATIVE,
-                actual_value=candidate.spread_relative_pct,
-                threshold=self.config.max_spread_relative_pct,
-                margin=margin,
-                margin_display=f"spread%={display}"
-            ))
+        # Spread relative filter (SECONDARY - only for mid >= threshold)
+        # For low-premium weeklies, percentage spreads are misleading due to tick constraints
+        # A $0.02 spread on $0.07 mid looks like 29% but is only 2 ticks - perfectly tradeable
+        if candidate.mid_price >= self.config.min_mid_for_relative_spread:
+            if candidate.spread_relative_pct > self.config.max_spread_relative_pct:
+                margin, display = self._calculate_margin(
+                    candidate.spread_relative_pct, self.config.max_spread_relative_pct, 'max'
+                )
+                reasons.append(RejectionReason.WIDE_SPREAD_RELATIVE)
+                details.append(RejectionDetail(
+                    reason=RejectionReason.WIDE_SPREAD_RELATIVE,
+                    actual_value=candidate.spread_relative_pct,
+                    threshold=self.config.max_spread_relative_pct,
+                    margin=margin,
+                    margin_display=f"spread%={candidate.spread_relative_pct:.1f}% vs {self.config.max_spread_relative_pct:.1f}% (mid=${candidate.mid_price:.2f})"
+                ))
 
         # Open interest filter
         if candidate.open_interest < self.config.min_open_interest:

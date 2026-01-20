@@ -551,21 +551,28 @@ def main():
 
                         if result.recommended_strikes:
                             print(f"\n  Top Recommendations (ranked by net credit):")
-                            print(f"  {'Strike':>8} {'Exp':>12} {'Delta':>6} {'Net $':>8} {'Yield':>7} {'OI':>7}")
-                            print("  " + "-" * 58)
+                            print(f"  {'Strike':>8} {'Exp':>12} {'Cts':>4} {'Delta':>6} "
+                                  f"{'$/Ct':>7} {'Total$':>8} {'Yield':>7} {'OI':>6}")
+                            print("  " + "-" * 72)
 
                             for strike in result.recommended_strikes[:3]:
+                                # Per-contract net credit
+                                per_contract = strike.cost_estimate.net_credit
                                 print(
                                     f"  ${strike.strike:>7.2f} "
                                     f"{strike.expiration_date:>12} "
+                                    f"{strike.contracts_to_sell:>4} "
                                     f"{strike.delta:>5.2f} "
+                                    f"${per_contract:>6.2f} "
                                     f"${strike.total_net_credit:>7.2f} "
                                     f"{strike.annualized_yield_pct:>6.1f}% "
-                                    f"{strike.open_interest:>6}"
+                                    f"{strike.open_interest:>5}"
                                 )
 
                             # Show broker checklist for top recommendation
                             if result.broker_checklist:
+                                top = result.recommended_strikes[0]
+                                per_ct = top.cost_estimate.net_credit
                                 print("\n  Broker Checklist (Top Recommendation):")
                                 checklist = result.broker_checklist
                                 print(f"    Action: {checklist.action}")
@@ -574,6 +581,9 @@ def main():
                                 print(f"    Expiration: {checklist.expiration}")
                                 print(f"    Limit Price: ${checklist.limit_price:.2f}")
                                 print(f"    Min Credit: ${checklist.min_acceptable_credit:.2f}")
+                                print(f"    ─────────────────────────────────────")
+                                print(f"    Expected Return (per contract): ${per_ct:.2f}")
+                                print(f"    Expected Return (total):        ${top.total_net_credit:.2f}")
                                 print(f"    Verification steps: {len(checklist.checks)}")
                         else:
                             print("\n  No recommendations - all strikes filtered out")
@@ -591,24 +601,25 @@ def main():
 
                                 # Near-miss analysis
                                 if result.near_miss_candidates:
-                                    print("\n  ═══════════════════════════════════════════════════════════════")
+                                    print("\n  ═══════════════════════════════════════════════════════════════════════════")
                                     print("  NEAR-MISS ANALYSIS (Top 5 closest to passing)")
-                                    print("  ═══════════════════════════════════════════════════════════════")
-                                    print(f"  {'#':>2} {'Strike':>8} {'Exp':>12} {'Delta':>6} {'Bid':>6} {'Ask':>6} "
-                                          f"{'OI':>6} {'Sprd%':>6} {'Net$':>7} {'Score':>5}")
-                                    print("  " + "-" * 78)
+                                    print("  ═══════════════════════════════════════════════════════════════════════════")
+                                    print(f"  {'#':>2} {'Strike':>8} {'Exp':>12} {'Cts':>3} {'Delta':>6} {'Bid':>6} "
+                                          f"{'OI':>6} {'$/Ct':>7} {'Total$':>8} {'Score':>5}")
+                                    print("  " + "-" * 82)
 
                                     for i, nm in enumerate(result.near_miss_candidates, 1):
+                                        per_ct = nm.cost_estimate.net_credit
                                         print(
                                             f"  {i:>2} "
                                             f"${nm.strike:>7.2f} "
                                             f"{nm.expiration_date:>12} "
+                                            f"{nm.contracts_to_sell:>3} "
                                             f"{nm.delta:>5.3f} "
                                             f"${nm.bid:>5.2f} "
-                                            f"${nm.ask:>5.2f} "
                                             f"{nm.open_interest:>5} "
-                                            f"{nm.spread_relative_pct:>5.1f}% "
-                                            f"${nm.total_net_credit:>6.2f} "
+                                            f"${per_ct:>6.2f} "
+                                            f"${nm.total_net_credit:>7.2f} "
                                             f"{nm.near_miss_score:>4.2f}"
                                         )
 
