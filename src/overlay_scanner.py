@@ -766,7 +766,7 @@ class OverlayScanner:
                     cost_estimate=cost_estimate,
                     delta_band=delta_band,
                     contracts_to_sell=contracts_available,
-                    total_net_credit=cost_estimate.net_credit,
+                    total_net_credit=cost_estimate.net_credit * contracts_available,
                     annualized_yield_pct=annualized_yield,
                     days_to_expiry=days_to_expiry,
                 )

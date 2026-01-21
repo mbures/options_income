@@ -6,18 +6,86 @@ that span earnings announcements, which can cause elevated volatility
 and assignment risk.
 
 Example:
-    from src.earnings_calendar import EarningsCalendar
+    from src.earnings_calendar import EarningsCalendar, EarningsEvent
 
     calendar = EarningsCalendar(finnhub_client)
     earnings_dates = calendar.get_earnings_dates("AAPL")
     spans, date = calendar.expiration_spans_earnings("AAPL", "2025-02-21")
+
+    # Get detailed earnings events
+    events = calendar.get_earnings_events("AAPL")
+    for event in events:
+        print(f"{event.symbol}: {event.date} ({event.time_of_day})")
 """
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class EarningsEvent:
+    """
+    Structured earnings event information.
+
+    Attributes:
+        symbol: Stock ticker symbol
+        date: Earnings announcement date (YYYY-MM-DD)
+        time_of_day: When earnings are announced ("BMO", "AMC", or "unknown")
+            BMO = Before Market Open
+            AMC = After Market Close
+        eps_estimate: Consensus EPS estimate (if available)
+        eps_actual: Actual reported EPS (if available, after announcement)
+        revenue_estimate: Consensus revenue estimate (if available)
+        revenue_actual: Actual reported revenue (if available)
+        days_until: Days until earnings (negative if past)
+    """
+
+    symbol: str
+    date: str
+    time_of_day: str = "unknown"
+    eps_estimate: Optional[float] = None
+    eps_actual: Optional[float] = None
+    revenue_estimate: Optional[float] = None
+    revenue_actual: Optional[float] = None
+    days_until: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        """Calculate days until earnings."""
+        if self.days_until is None:
+            try:
+                earn_dt = datetime.fromisoformat(self.date)
+                self.days_until = (earn_dt - datetime.now()).days
+            except ValueError:
+                self.days_until = None
+
+    @property
+    def is_upcoming(self) -> bool:
+        """Check if earnings is in the future."""
+        return self.days_until is not None and self.days_until >= 0
+
+    @property
+    def is_imminent(self) -> bool:
+        """Check if earnings is within 7 days."""
+        return self.days_until is not None and 0 <= self.days_until <= 7
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "symbol": self.symbol,
+            "date": self.date,
+            "time_of_day": self.time_of_day,
+            "eps_estimate": self.eps_estimate,
+            "eps_actual": self.eps_actual,
+            "revenue_estimate": self.revenue_estimate,
+            "revenue_actual": self.revenue_actual,
+            "days_until": self.days_until,
+            "is_upcoming": self.is_upcoming,
+            "is_imminent": self.is_imminent,
+        }
 
 
 class EarningsCalendar:
@@ -130,6 +198,62 @@ class EarningsCalendar:
                 continue
 
         return False, None
+
+    def get_earnings_events(
+        self, symbol: str, from_date: Optional[str] = None, to_date: Optional[str] = None
+    ) -> list[EarningsEvent]:
+        """
+        Get structured earnings events for a symbol.
+
+        Args:
+            symbol: Stock ticker symbol
+            from_date: Start date (YYYY-MM-DD), default today
+            to_date: End date (YYYY-MM-DD), default +60 days
+
+        Returns:
+            List of EarningsEvent objects with detailed information
+        """
+        symbol = symbol.upper()
+        dates = self.get_earnings_dates(symbol, from_date, to_date)
+
+        events = []
+        for date in dates:
+            event = EarningsEvent(symbol=symbol, date=date)
+            events.append(event)
+
+        return events
+
+    def get_next_earnings(self, symbol: str) -> Optional[EarningsEvent]:
+        """
+        Get the next upcoming earnings event for a symbol.
+
+        Args:
+            symbol: Stock ticker symbol
+
+        Returns:
+            Next EarningsEvent or None if none found
+        """
+        events = self.get_earnings_events(symbol)
+        upcoming = [e for e in events if e.is_upcoming]
+
+        if upcoming:
+            # Sort by date and return the nearest
+            upcoming.sort(key=lambda e: e.date)
+            return upcoming[0]
+        return None
+
+    def days_to_earnings(self, symbol: str) -> Optional[int]:
+        """
+        Get days until next earnings for a symbol.
+
+        Args:
+            symbol: Stock ticker symbol
+
+        Returns:
+            Days until next earnings, or None if none found
+        """
+        event = self.get_next_earnings(symbol)
+        return event.days_until if event else None
 
     def clear_cache(self, symbol: Optional[str] = None) -> None:
         """
