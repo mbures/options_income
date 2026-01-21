@@ -276,6 +276,8 @@ def main():
             nearest_exp = expirations[0] if expirations else None
             profile_strikes = None
             put_profile_strikes = None
+            call_recs = None  # Chain-backed recommendations (Step 8)
+            put_recs = None  # Chain-backed recommendations (Step 8)
 
             if nearest_exp:
                 from datetime import datetime
@@ -788,22 +790,52 @@ def main():
             print(f"ATM Implied Volatility: {atm_iv * 100:.2f}%")
             print(f"Volatility Regime: {regime}")
 
-            if nearest_exp and profile_strikes and put_profile_strikes:
-                mod_call = profile_strikes[StrikeProfile.MODERATE]
-                cons_put = put_profile_strikes[StrikeProfile.CONSERVATIVE]
-                mod_call_prob = (
-                    mod_call.assignment_probability * 100 if mod_call.assignment_probability else 0
-                )
-                cons_put_prob = (
-                    cons_put.assignment_probability * 100 if cons_put.assignment_probability else 0
-                )
+            if nearest_exp:
                 print(f"\nSuggested Strikes ({nearest_exp}):")
-                print(
-                    f"  Covered Call (Moderate): ${mod_call.tradeable_strike:.2f} ({mod_call_prob:.1f}% P(ITM))"
-                )
-                print(
-                    f"  Cash-Secured Put (Conservative): ${cons_put.tradeable_strike:.2f} ({cons_put_prob:.1f}% P(ITM))"
-                )
+
+                # Prefer chain-backed recommendations (Step 8) over theoretical (Step 7)
+                # Chain-backed strikes have passed tradability filters and are directly tradeable
+                if call_recs:
+                    top_call = call_recs[0]
+                    call_prob = top_call.assignment_probability * 100
+                    print(
+                        f"  Covered Call (Moderate): ${top_call.strike:.2f} "
+                        f"({call_prob:.1f}% P(ITM)) [chain-backed]"
+                    )
+                elif profile_strikes:
+                    mod_call = profile_strikes[StrikeProfile.MODERATE]
+                    mod_call_prob = (
+                        mod_call.assignment_probability * 100
+                        if mod_call.assignment_probability
+                        else 0
+                    )
+                    print(
+                        f"  Covered Call (Moderate): ${mod_call.tradeable_strike:.2f} "
+                        f"({mod_call_prob:.1f}% P(ITM)) [theoretical]"
+                    )
+                else:
+                    print("  Covered Call: No recommendations available")
+
+                if put_recs:
+                    top_put = put_recs[0]
+                    put_prob = top_put.assignment_probability * 100
+                    print(
+                        f"  Cash-Secured Put (Conservative): ${top_put.strike:.2f} "
+                        f"({put_prob:.1f}% P(ITM)) [chain-backed]"
+                    )
+                elif put_profile_strikes:
+                    cons_put = put_profile_strikes[StrikeProfile.CONSERVATIVE]
+                    cons_put_prob = (
+                        cons_put.assignment_probability * 100
+                        if cons_put.assignment_probability
+                        else 0
+                    )
+                    print(
+                        f"  Cash-Secured Put (Conservative): ${cons_put.tradeable_strike:.2f} "
+                        f"({cons_put_prob:.1f}% P(ITM)) [theoretical]"
+                    )
+                else:
+                    print("  Cash-Secured Put: No recommendations available")
 
         else:
             print("\n⚠ Could not extract implied volatility from options chain")
