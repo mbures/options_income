@@ -355,11 +355,17 @@ A Python application that interfaces with Finnhub and Alpha Vantage APIs to:
 - Return both theoretical and tradeable strikes
 
 **FR-24: Assignment Probability Estimation**
-- Calculate **finish ITM** probability at expiration using a clearly defined convention
-- System must output **both**:
-  - `p_itm_model`: model-based finish ITM probability (Black–Scholes digital proxy)
-  - `delta_chain`: delta from the options chain (market-implied near-term risk proxy)
-- The probability convention (risk-free drift vs. driftless) must be explicitly documented and consistent across code and docs
+- Calculate **finish ITM** probability at expiration using Black-Scholes risk-neutral convention:
+  - For calls: P(S_T > K) = N(d2)  — probability stock finishes above strike
+  - For puts:  P(S_T < K) = N(-d2) — probability stock finishes below strike
+  - where d2 = [ln(S/K) + (r - σ²/2)T] / (σ√T)
+- System must output **both** probability metrics:
+  - `probability` (or `p_itm`): model-based finish ITM probability from Black-Scholes
+  - `delta`: model delta from Black-Scholes; for market-implied delta, use `contract.delta` from the options chain
+- Implementation fields:
+  - `ProbabilityResult.probability`: model-based P(ITM) — the "p_itm_model" concept
+  - `CandidateStrike.delta`: computed delta; `OptionContract.delta`: chain delta — the "delta_chain" concept
+- The probability convention must be explicitly documented and consistent across code and docs
 - Include unit tests to prevent sign inversions and validate monotonicity (further OTM ⇒ lower finish ITM probability)
 - Support Monte Carlo simulation as an optional enhancement
 

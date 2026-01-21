@@ -584,26 +584,32 @@ class StrikeOptimizer:
         option_type: str = "call"
     ) -> ProbabilityResult:
         """
-        Calculate probability of assignment at expiration.
-        
-        For calls: P(S_T > K) = N(-d2)
-        For puts: P(S_T < K) = N(d2)
+        Calculate probability of finishing ITM at expiration (p_itm_model).
+
+        Uses Black-Scholes risk-neutral probability convention:
+        - For calls: P(S_T > K) = N(d2)   [probability stock finishes above strike]
+        - For puts:  P(S_T < K) = N(-d2)  [probability stock finishes below strike]
+
+        where d2 = [ln(S/K) + (r - σ²/2)T] / (σ√T)
+
+        Note: This is the model-based "finish ITM" probability. For market-implied
+        risk assessment, use delta_chain from the options chain data.
         """
         T = days_to_expiry / 365.0
-        
+
         d1 = (math.log(current_price / strike) + (risk_free_rate + 0.5 * volatility**2) * T) / (volatility * math.sqrt(T))
         d2 = d1 - volatility * math.sqrt(T)
-        
+
         if option_type.lower() == "call":
-            prob_itm = self._norm_cdf(-d2)
-            delta = self._norm_cdf(d1)
+            p_itm_model = self._norm_cdf(d2)   # N(d2) for calls
+            delta = self._norm_cdf(d1)          # N(d1) for calls
         else:
-            prob_itm = self._norm_cdf(d2)
-            delta = -self._norm_cdf(-d1)
-        
+            p_itm_model = self._norm_cdf(-d2)  # N(-d2) for puts
+            delta = self._norm_cdf(d1) - 1      # N(d1) - 1 for puts
+
         return ProbabilityResult(
-            probability_itm=prob_itm,
-            delta=delta,
+            probability_itm=p_itm_model,  # Model-based finish ITM probability
+            delta=delta,                   # Model delta (for chain delta, use contract.delta)
             d1=d1,
             d2=d2
         )
