@@ -284,8 +284,8 @@ class CoveredCallAnalyzer:
             if contract.strike <= current_price:
                 continue
 
-            # Skip low premium
-            if contract.bid and contract.bid < min_premium:
+            # Skip zero or low premium (PRD tradability gate)
+            if not contract.bid or contract.bid < min_premium:
                 continue
 
             try:
@@ -537,8 +537,8 @@ class CoveredPutAnalyzer:
             if contract.strike >= current_price:
                 continue
 
-            # Skip low premium
-            if contract.bid and contract.bid < min_premium:
+            # Skip zero or low premium (PRD tradability gate)
+            if not contract.bid or contract.bid < min_premium:
                 continue
 
             try:

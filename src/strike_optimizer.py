@@ -545,8 +545,9 @@ class StrikeOptimizer:
                 warnings.append(f"Wide bid-ask spread: {bid_ask_spread_pct:.1f}%")
                 # Still include but with warning
 
+            # Skip zero or missing bid (PRD tradability gate)
             if bid is None or bid <= 0:
-                warnings.append("No bid price available")
+                continue
 
             rec = StrikeRecommendation(
                 contract=contract,
