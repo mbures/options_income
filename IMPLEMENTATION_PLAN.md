@@ -292,34 +292,37 @@ This document tracks the implementation progress of the Covered Options Strategy
 
 ### Sprint 7: Phase 9.1 - OAuth Core Infrastructure (Est. 8 story points) 🔄 IN PROGRESS
 
-**Goal**: Implement core OAuth 2.0 infrastructure for Schwab API integration including configuration, token storage, and token lifecycle management.
+**Goal**: Implement core OAuth 2.0 infrastructure for Schwab API integration including configuration, token storage, and token lifecycle management. Architecture must support devcontainer deployment with split execution (host authorization, container application).
 
 #### S7.1: OAuth Configuration Module (2 pts) ⬜
 - [ ] **S7.1.1**: Create `src/oauth/` module directory structure
 - [ ] **S7.1.2**: Create `src/oauth/config.py` with `SchwabOAuthConfig` dataclass
-- [ ] **S7.1.3**: Implement environment variable loading (`from_env()` classmethod)
-- [ ] **S7.1.4**: Add configuration validation (client_id, client_secret, ports, paths)
-- [ ] **S7.1.5**: Implement `callback_url` property generation
-- [ ] **S7.1.6**: Add support for custom SSL certificate paths
-- [ ] **S7.1.7**: Create unit tests for config loading and validation
+- [ ] **S7.1.3**: Set default `token_file` to `/workspaces/options_income/.schwab_tokens.json`
+- [ ] **S7.1.4**: Implement environment variable loading (`from_env()` classmethod)
+- [ ] **S7.1.5**: Add configuration validation (client_id, client_secret, ports, paths)
+- [ ] **S7.1.6**: Implement `callback_url` property generation
+- [ ] **S7.1.7**: Add support for custom SSL certificate paths (for host execution)
+- [ ] **S7.1.8**: Create unit tests for config loading and validation
 
-**Requirements**: FR-O1, FR-O2, FR-O3 from oauth_requirements.md
+**Requirements**: FR-O1, FR-O2, FR-O3, FR-O3.1 from oauth_requirements.md
 **Dependencies**: None
-**Deliverable**: Configuration management with environment variable support
+**Deliverable**: Configuration management with container-compatible paths
 
 #### S7.2: Token Storage Implementation (2 pts) ⬜
 - [ ] **S7.2.1**: Create `src/oauth/token_storage.py` module
 - [ ] **S7.2.2**: Implement `TokenData` dataclass with all fields
 - [ ] **S7.2.3**: Add expiry calculation methods (`is_expired`, `expires_within`)
 - [ ] **S7.2.4**: Implement `TokenStorage` class with file-based persistence
-- [ ] **S7.2.5**: Add JSON serialization/deserialization methods
-- [ ] **S7.2.6**: Set secure file permissions (chmod 600) on token file
-- [ ] **S7.2.7**: Handle corrupted/missing files gracefully
-- [ ] **S7.2.8**: Create unit tests for storage operations (target: >95% coverage)
+- [ ] **S7.2.5**: Use absolute path `/workspaces/options_income/.schwab_tokens.json`
+- [ ] **S7.2.6**: Add JSON serialization/deserialization methods
+- [ ] **S7.2.7**: Set secure file permissions (chmod 600) on token file
+- [ ] **S7.2.8**: Verify write permissions work from both host and container
+- [ ] **S7.2.9**: Handle corrupted/missing files gracefully
+- [ ] **S7.2.10**: Create unit tests for storage operations (target: >95% coverage)
 
-**Requirements**: FR-O8, FR-O9, FR-O10, NFR-O8 from oauth_requirements.md
+**Requirements**: FR-O8, FR-O9, FR-O10, FR-O18, NFR-O8 from oauth_requirements.md
 **Dependencies**: S7.1 (config)
-**Deliverable**: Secure file-based token persistence
+**Deliverable**: Secure file-based token persistence with container compatibility
 
 #### S7.3: Token Manager Core (2 pts) ⬜
 - [ ] **S7.3.1**: Create `src/oauth/token_manager.py` module
@@ -362,22 +365,24 @@ This document tracks the implementation progress of the Covered Options Strategy
 
 ### Sprint 8: Phase 9.2 - OAuth Authorization Flow (Est. 10 story points) ⬜ PLANNED
 
-**Goal**: Implement OAuth 2.0 Authorization Code flow with HTTPS callback server and browser integration.
+**Goal**: Implement OAuth 2.0 Authorization Code flow with HTTPS callback server and browser integration. **Critical**: Authorization server must run on HOST machine (not in container) to access SSL certificates and port 8443.
 
 #### S8.1: HTTPS Callback Server (3 pts) ⬜
 - [ ] **S8.1.1**: Create `src/oauth/auth_server.py` module
 - [ ] **S8.1.2**: Implement `OAuthCallbackServer` class using Flask
-- [ ] **S8.1.3**: Configure SSL context with Let's Encrypt certificates
-- [ ] **S8.1.4**: Implement `/oauth/callback` route handler
-- [ ] **S8.1.5**: Parse authorization code from callback URL
-- [ ] **S8.1.6**: Handle OAuth error responses (error, error_description)
-- [ ] **S8.1.7**: Serve user-friendly HTML success/failure pages
-- [ ] **S8.1.8**: Implement `/oauth/status` endpoint for debugging
-- [ ] **S8.1.9**: Add server start/stop methods with threading support
+- [ ] **S8.1.3**: Configure SSL context with certificates from `/etc/letsencrypt`
+- [ ] **S8.1.4**: Verify SSL certificate access works on HOST machine
+- [ ] **S8.1.5**: Implement `/oauth/callback` route handler
+- [ ] **S8.1.6**: Parse authorization code from callback URL
+- [ ] **S8.1.7**: Handle OAuth error responses (error, error_description)
+- [ ] **S8.1.8**: Serve user-friendly HTML success/failure pages
+- [ ] **S8.1.9**: Implement `/oauth/status` endpoint for debugging
+- [ ] **S8.1.10**: Add server start/stop methods with threading support
+- [ ] **S8.1.11**: Ensure server binds to 0.0.0.0 (accessible from router)
 
-**Requirements**: FR-O5, NFR-O1, NFR-O9 from oauth_requirements.md
+**Requirements**: FR-O5, FR-O16, NFR-O1, NFR-O9 from oauth_requirements.md
 **Dependencies**: S7.1 (config)
-**Deliverable**: HTTPS callback server that receives authorization codes
+**Deliverable**: HTTPS callback server that runs on host and receives authorization codes
 
 #### S8.2: Authorization URL Generation & Browser Flow (2 pts) ⬜
 - [ ] **S8.2.1**: Implement `generate_authorization_url()` method
@@ -419,25 +424,46 @@ This document tracks the implementation progress of the Covered Options Strategy
 **Dependencies**: S7.3 (token manager), S8.3 (auth flow)
 **Deliverable**: Simple, high-level OAuth interface for application use
 
-#### S8.5: Authorization Script & User Experience (1 pt) ⬜
-- [ ] **S8.5.1**: Create `scripts/authorize_schwab.py` utility script
-- [ ] **S8.5.2**: Add clear instructions and progress feedback
-- [ ] **S8.5.3**: Verify token file creation and permissions
-- [ ] **S8.5.4**: Display authorization status and token expiry
-- [ ] **S8.5.5**: Add `--revoke` flag for token cleanup
-- [ ] **S8.5.6**: Test complete user journey from initial auth to API access
+#### S8.5: Host Authorization Script & Container Utility (2 pts) ⬜
+- [ ] **S8.5.1**: Create `scripts/authorize_schwab_host.py` for HOST execution
+- [ ] **S8.5.2**: Add banner clearly indicating "RUN ON HOST MACHINE"
+- [ ] **S8.5.3**: Verify SSL certificate access at `/etc/letsencrypt`
+- [ ] **S8.5.4**: Write tokens to `/workspaces/options_income/.schwab_tokens.json`
+- [ ] **S8.5.5**: Set file permissions (chmod 600) after writing
+- [ ] **S8.5.6**: Create `scripts/check_schwab_auth.py` for CONTAINER usage
+- [ ] **S8.5.7**: Check script displays token status from container
+- [ ] **S8.5.8**: Add `--revoke` flag to host script for token cleanup
+- [ ] **S8.5.9**: Test complete user journey: host auth → container usage
+- [ ] **S8.5.10**: Verify token refresh works from container
 
-**Requirements**: US-O1, US-O4, US-O5, NFR-O12 from oauth_requirements.md
+**Requirements**: US-O1, US-O4, US-O5, FR-O16, FR-O17, NFR-O12 from oauth_requirements.md
 **Dependencies**: S8.4 (coordinator)
-**Deliverable**: User-friendly authorization utility
+**Deliverable**: Split execution scripts (host authorization, container status check)
+
+#### S8.6: Container Architecture Setup (1 pt) ⬜
+- [ ] **S8.6.1**: Add `.schwab_tokens.json` to `.gitignore`
+- [ ] **S8.6.2**: Verify `.devcontainer/devcontainer.json` has SSL mount
+- [ ] **S8.6.3**: Create `docs/CONTAINER_ARCHITECTURE.md` documentation
+- [ ] **S8.6.4**: Document host vs container execution model
+- [ ] **S8.6.5**: Add troubleshooting section for permission issues
+- [ ] **S8.6.6**: Create workflow diagram for first-time setup
+- [ ] **S8.6.7**: Document token file location and rationale
+- [ ] **S8.6.8**: Add examples of host auth + container usage
+
+**Requirements**: FR-O17, FR-O18, NFR-O15 from oauth_requirements.md
+**Dependencies**: S8.5 (scripts)
+**Deliverable**: Complete container architecture documentation and configuration
 
 **Acceptance Criteria**:
-- AC-O1: Callback server starts on configured port with HTTPS
+- AC-O1: Callback server starts on configured port with HTTPS (on HOST)
 - AC-O2: Authorization URL contains correct parameters
 - AC-O3: Callback correctly extracts authorization code
 - AC-O4: Token exchange returns valid tokens
-- AC-O5: Tokens saved to configured file
+- AC-O5: Tokens saved to project directory
 - AC-O6: Error responses handled gracefully
+- AC-O20: Authorization script runs successfully on host
+- AC-O21: Token file written to `/workspaces/options_income/.schwab_tokens.json`
+- AC-O25: .gitignore excludes token file
 
 ---
 
@@ -527,52 +553,63 @@ This document tracks the implementation progress of the Covered Options Strategy
 
 #### S10.2: Integration Tests (2 pts) ⬜
 - [ ] **S10.2.1**: Create mock Schwab OAuth server for integration testing
-- [ ] **S10.2.2**: Test complete authorization flow end-to-end
-- [ ] **S10.2.3**: Test token refresh cycle simulation
-- [ ] **S10.2.4**: Test error recovery scenarios (network failures, expired tokens)
-- [ ] **S10.2.5**: Test OAuth + Schwab API integration
-- [ ] **S10.2.6**: Test wheel strategy with Schwab data source
-- [ ] **S10.2.7**: Validate against Schwab sandbox environment (if available)
+- [ ] **S10.2.2**: Test complete authorization flow end-to-end (host execution)
+- [ ] **S10.2.3**: Test token refresh cycle simulation (container execution)
+- [ ] **S10.2.4**: Test token file written by host, read by container
+- [ ] **S10.2.5**: Test token file refresh from container, readable by host
+- [ ] **S10.2.6**: Test error recovery scenarios (network failures, expired tokens)
+- [ ] **S10.2.7**: Test OAuth + Schwab API integration from container
+- [ ] **S10.2.8**: Test wheel strategy with Schwab data source
+- [ ] **S10.2.9**: Validate against Schwab sandbox environment (if available)
 
-**Requirements**: Section 10.3 from oauth_requirements.md
+**Requirements**: Section 10.3 from oauth_requirements.md, AC-O22, AC-O23
 **Dependencies**: S10.1 (unit tests)
-**Deliverable**: Integration test suite
+**Deliverable**: Integration test suite with container architecture validation
 
 #### S10.3: Documentation (2 pts) ⬜
 - [ ] **S10.3.1**: Create `docs/SCHWAB_OAUTH_SETUP.md` with detailed setup instructions
-- [ ] **S10.3.2**: Document Schwab Developer Portal app registration
-- [ ] **S10.3.3**: Document SSL certificate setup (Let's Encrypt)
-- [ ] **S10.3.4**: Document port forwarding configuration
-- [ ] **S10.3.5**: Create troubleshooting guide for common OAuth errors
-- [ ] **S10.3.6**: Update main README.md with Schwab integration section
-- [ ] **S10.3.7**: Add code documentation (docstrings) to all OAuth modules
-- [ ] **S10.3.8**: Create example usage scripts
+- [ ] **S10.3.2**: Document split execution model (host vs container)
+- [ ] **S10.3.3**: Document Schwab Developer Portal app registration
+- [ ] **S10.3.4**: Document SSL certificate setup (Let's Encrypt)
+- [ ] **S10.3.5**: Document port forwarding configuration
+- [ ] **S10.3.6**: Create container architecture troubleshooting section
+- [ ] **S10.3.7**: Add workflow diagrams for host auth + container usage
+- [ ] **S10.3.8**: Create troubleshooting guide for common OAuth errors
+- [ ] **S10.3.9**: Update main README.md with Schwab integration section
+- [ ] **S10.3.10**: Add code documentation (docstrings) to all OAuth modules
+- [ ] **S10.3.11**: Create example usage scripts (host and container)
 
 **Requirements**: Section 11 from oauth_requirements.md, NFR-O13, NFR-O15
-**Dependencies**: Sprints 7, 8, 9
-**Deliverable**: Complete documentation package
+**Dependencies**: Sprints 7, 8, 9, S8.6 (container docs)
+**Deliverable**: Complete documentation package with container architecture guide
 
 #### S10.4: Manual Testing & Production Deployment (1 pt) ⬜
 - [ ] **S10.4.1**: Verify Schwab Dev Portal app configuration
 - [ ] **S10.4.2**: Test Let's Encrypt certificate renewal process
-- [ ] **S10.4.3**: Verify port forwarding (8443 → local machine)
-- [ ] **S10.4.4**: Run complete manual test checklist (Section 10.4 from requirements)
-- [ ] **S10.4.5**: Test fresh install authorization flow
-- [ ] **S10.4.6**: Test token auto-refresh after 25 minutes
-- [ ] **S10.4.7**: Test re-authorization after token expiry
-- [ ] **S10.4.8**: Verify production wheel CLI with Schwab data
+- [ ] **S10.4.3**: Verify port forwarding (8443 → host machine)
+- [ ] **S10.4.4**: Verify `.devcontainer/devcontainer.json` SSL mount
+- [ ] **S10.4.5**: Test authorization flow ON HOST machine
+- [ ] **S10.4.6**: Verify token file written to project directory
+- [ ] **S10.4.7**: Test wheel CLI FROM CONTAINER reads tokens
+- [ ] **S10.4.8**: Test token auto-refresh from container (wait 25 min or mock)
+- [ ] **S10.4.9**: Verify refreshed tokens written back successfully
+- [ ] **S10.4.10**: Test re-authorization after token expiry (host script)
+- [ ] **S10.4.11**: Test .gitignore excludes token file
+- [ ] **S10.4.12**: Run complete manual test checklist
 
-**Requirements**: Section 8 from oauth_design.md (Deployment Checklist)
+**Requirements**: Section 8 from oauth_design.md (Deployment Checklist), AC-O20 through AC-O25
 **Dependencies**: S10.3 (documentation)
-**Deliverable**: Production-ready OAuth integration
+**Deliverable**: Production-ready OAuth integration with container architecture validation
 
 **Acceptance Criteria**:
 - OAuth module >85% test coverage
-- All manual test scenarios pass
-- Documentation complete and accurate
-- Wheel CLI successfully uses Schwab data
-- Token refresh works automatically
-- Re-authorization process is smooth
+- All manual test scenarios pass (host + container)
+- Documentation complete and accurate with container architecture
+- Wheel CLI successfully uses Schwab data from container
+- Token refresh works automatically from container
+- Re-authorization process is smooth (host execution)
+- Token file location works in both contexts
+- .gitignore properly configured
 
 ---
 
@@ -731,20 +768,20 @@ This document tracks the implementation progress of the Covered Options Strategy
 | AC-34 | Complete calculation in <500ms | ⬜ |
 | AC-35 | README provides clear setup instructions | ⬜ Partial |
 
-### OAuth Integration (AC-O1 to AC-O19)
+### OAuth Integration (AC-O1 to AC-O25)
 
 | # | Criterion | Status |
 |---|-----------|--------|
-| AC-O1 | Callback server starts on configured port with HTTPS | ⬜ |
+| AC-O1 | Callback server starts on configured port with HTTPS (HOST) | ⬜ |
 | AC-O2 | Authorization URL contains correct parameters | ⬜ |
 | AC-O3 | Callback correctly extracts authorization code | ⬜ |
 | AC-O4 | Token exchange returns valid tokens | ⬜ |
-| AC-O5 | Tokens saved to configured file | ⬜ |
+| AC-O5 | Tokens saved to project directory | ⬜ |
 | AC-O6 | Error responses handled gracefully | ⬜ |
-| AC-O7 | Tokens load correctly from file | ⬜ |
+| AC-O7 | Tokens load correctly from file (CONTAINER) | ⬜ |
 | AC-O8 | Token expiry calculated correctly | ⬜ |
-| AC-O9 | Auto-refresh triggers before expiry | ⬜ |
-| AC-O10 | Refresh updates stored tokens | ⬜ |
+| AC-O9 | Auto-refresh triggers before expiry (CONTAINER) | ⬜ |
+| AC-O10 | Refresh updates stored tokens (CONTAINER) | ⬜ |
 | AC-O11 | get_access_token returns valid token | ⬜ |
 | AC-O12 | Missing tokens raise clear exception | ⬜ |
 | AC-O13 | Missing config raises ConfigurationError | ⬜ |
@@ -754,6 +791,12 @@ This document tracks the implementation progress of the Covered Options Strategy
 | AC-O17 | Authorization header format correct | ⬜ |
 | AC-O18 | Schwab API call succeeds with token | ⬜ |
 | AC-O19 | 401 response triggers appropriate error | ⬜ |
+| AC-O20 | Authorization script runs successfully on host | ⬜ |
+| AC-O21 | Token file written to `/workspaces/options_income/.schwab_tokens.json` | ⬜ |
+| AC-O22 | Application in container reads tokens successfully | ⬜ |
+| AC-O23 | Token refresh from container writes back successfully | ⬜ |
+| AC-O24 | Same absolute path works in both contexts | ⬜ |
+| AC-O25 | .gitignore excludes token file | ⬜ |
 
 ---
 
@@ -789,25 +832,37 @@ This document tracks the implementation progress of the Covered Options Strategy
 ### OAuth Module Notes
 
 - Phase 9 adds Schwab API integration via OAuth 2.0 Authorization Code flow
+- **Container Architecture**: Split execution model required
+  - Authorization (OAuth callback server) runs on **HOST** machine
+  - Application (wheel strategy) runs in **DEVCONTAINER**
+  - Token file stored in project directory (shared workspace)
+  - Same absolute path works in both contexts: `/workspaces/options_income/.schwab_tokens.json`
 - OAuth implementation follows security best practices:
   - Client secret in environment variables only
   - Token file restricted to user-only permissions (chmod 600)
+  - Token file excluded from git (.gitignore)
   - No sensitive data in logs or error messages
   - HTTPS required for callback server
 - Infrastructure prerequisites:
   - Domain with DNS (dirtydata.ai with dyndns)
-  - Let's Encrypt SSL certificate
-  - Port forwarding configured (8443 → local)
+  - Let's Encrypt SSL certificate (mounted in devcontainer)
+  - Port forwarding configured (8443 → host machine)
   - Schwab Developer Portal app registered
+  - Devcontainer with SSL mount configured
 - Design documents:
-  - `docs/oauth_design.md` - Technical architecture and specifications
-  - `docs/oauth_requirements.md` - Functional and non-functional requirements
-- Estimated timeline: 4 sprints (35 story points total)
+  - `docs/oauth_design.md` - Technical architecture and specifications (updated for containers)
+  - `docs/oauth_requirements.md` - Functional and non-functional requirements (updated for containers)
+  - `docs/CONTAINER_ARCHITECTURE.md` - Container deployment guide (new)
+- Estimated timeline: 4 sprints (37 story points total, +2 for container architecture)
 - OAuth module will enable:
   - Live market data from Schwab
   - Automatic position import from brokerage accounts
   - Foundation for future order placement features
   - Higher quality data from primary source (broker)
+- Key architectural decisions:
+  - Option 1 (selected): Token file in project directory
+  - Rationale: No additional mounts, same path everywhere, simple
+  - Trade-off: Token file in project (but gitignored)
 
 ---
 
@@ -823,3 +878,4 @@ This document tracks the implementation progress of the Covered Options Strategy
 | 1.5 | 2026-01-20 | Software Developer | Sprint 5 complete: Ladder Builder module implemented with 40 tests and 91% coverage. Features: weekly expiration detection (Friday/Wednesday/Monday), allocation strategies (Equal/FrontWeighted/BackWeighted), sigma adjustment by week, earnings integration. All Sprint 5 acceptance criteria met. |
 | 1.6 | 2026-01-20 | Software Developer | Sprint 6 complete: Risk Analyzer module implemented with 31 tests (95% coverage). Features: income metrics (annualized yield, returns, breakevens), risk metrics (expected value, opportunity cost, Sharpe-like ratio), scenario analysis engine, strategy comparison. EarningsEvent dataclass added with 23 tests (98% coverage). README.md created. All Sprint 6 acceptance criteria met. |
 | 1.7 | 2026-01-25 | Software Developer | Added Phase 9: Schwab OAuth Integration. Analyzed oauth_design.md and oauth_requirements.md to create phased development plan across 4 sprints (35 story points). Sprints 7-10 cover: OAuth core infrastructure, authorization flow, Schwab API client integration, and comprehensive testing/documentation. Added OAuth-specific acceptance criteria (AC-O1 to AC-O19), infrastructure dependencies, and implementation notes. |
+| 1.8 | 2026-01-25 | Software Developer | Updated Phase 9 for devcontainer architecture (Option 1: project directory). All three documents updated (oauth_design.md, oauth_requirements.md, IMPLEMENTATION_PLAN.md) to reflect split execution model: authorization runs on HOST (needs SSL certs, port 8443), application runs in CONTAINER. Token file at `/workspaces/options_income/.schwab_tokens.json` (same path everywhere). Added 6 new acceptance criteria (AC-O20 to AC-O25) for container architecture. Updated sprints 7-10 with container-specific tasks (+2 story points for S8.6). Added CONTAINER_ARCHITECTURE.md documentation task. |
