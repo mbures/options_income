@@ -29,10 +29,11 @@ The existing system uses Finnhub and Alpha Vantage for options and price data. A
 
 **In Scope:**
 - OAuth 2.0 Authorization Code flow implementation
-- Local HTTPS callback server
-- Token storage (plaintext JSON)
-- Automatic token refresh
+- Local HTTPS callback server (runs on HOST machine)
+- Token storage (plaintext JSON in project directory)
+- Automatic token refresh (runs in devcontainer)
 - Integration interface for Schwab API client
+- Devcontainer architecture support with split execution model
 
 **Out of Scope:**
 - Multi-user support
@@ -40,6 +41,7 @@ The existing system uses Finnhub and Alpha Vantage for options and price data. A
 - Web-based OAuth management UI
 - Schwab API client implementation (separate module)
 - Order placement functionality
+- Container orchestration (Docker Compose, Kubernetes)
 
 ### 1.4 Key Stakeholders
 
@@ -73,6 +75,13 @@ The existing system uses Finnhub and Alpha Vantage for options and price data. A
 - System MUST generate callback URL in format: `https://{host}:{port}/oauth/callback`
 - Generated URL MUST match the URL registered in Schwab Dev Portal
 
+**FR-O3.1: Container Architecture Support** (NEW)
+- Token file MUST use project directory path: `/workspaces/options_income/.schwab_tokens.json`
+- Path MUST be absolute and work identically in both host and container contexts
+- Authorization script MUST be runnable on host (outside container)
+- Application in container MUST successfully read and refresh tokens from shared file
+- Token file MUST be added to `.gitignore` to prevent credential exposure
+
 ### 2.2 Authorization Flow
 
 **FR-O4: Authorization URL Generation**
@@ -82,12 +91,13 @@ The existing system uses Finnhub and Alpha Vantage for options and price data. A
   - `response_type`: "code"
 
 **FR-O5: Callback Server**
-- System MUST start HTTPS server on configured port
-- Server MUST use valid SSL certificate for configured domain
+- System MUST start HTTPS server on configured port **on HOST machine**
+- Server MUST use valid SSL certificate for configured domain (from `/etc/letsencrypt`)
 - Server MUST handle GET requests to `/oauth/callback`
 - Server MUST extract `code` parameter from callback
 - Server MUST handle `error` and `error_description` parameters
 - Server MUST display user-friendly success/failure HTML page
+- Server MUST write tokens to project directory (accessible to container)
 
 **FR-O6: Browser Integration**
 - System SHOULD automatically open authorization URL in default browser
@@ -106,7 +116,7 @@ The existing system uses Finnhub and Alpha Vantage for options and price data. A
 ### 2.3 Token Management
 
 **FR-O8: Token Storage**
-- System MUST store tokens in JSON file at configured path
+- System MUST store tokens in JSON file at configured path: `/workspaces/options_income/.schwab_tokens.json`
 - Stored data MUST include:
   - `access_token`
   - `refresh_token`
@@ -115,6 +125,8 @@ The existing system uses Finnhub and Alpha Vantage for options and price data. A
   - `scope`
   - `issued_at` (ISO timestamp)
 - System MUST create parent directories if they don't exist
+- Token file MUST be writable from both host (authorization) and container (refresh)
+- File permissions SHOULD be set to 600 (user-only read/write)
 
 **FR-O9: Token Loading**
 - System MUST load tokens from storage file on startup
@@ -165,6 +177,29 @@ The existing system uses Finnhub and Alpha Vantage for options and price data. A
 - System MUST provide method to delete stored tokens
 - Deletion MUST clear any cached tokens in memory
 - System SHOULD log revocation event
+
+### 2.6 Container Architecture Requirements (NEW)
+
+**FR-O16: Split Execution Model**
+- Authorization script MUST be executable on host machine (outside devcontainer)
+- Authorization script MUST have access to SSL certificates at `/etc/letsencrypt`
+- Authorization script MUST write tokens to workspace directory
+- Application in container MUST read tokens from same workspace directory
+- Token refresh MUST work from inside container
+- No runtime container detection logic required (same path everywhere)
+
+**FR-O17: Devcontainer Integration**
+- Token file path MUST be: `/workspaces/options_income/.schwab_tokens.json`
+- Path MUST work identically on host and in container
+- No additional volume mounts required beyond workspace (automatic)
+- SSL certificate mount MUST be configured in `.devcontainer/devcontainer.json`
+- Documentation MUST clearly specify which operations run where (host vs container)
+
+**FR-O18: File Access Patterns**
+- Host authorization script: Write-only access to token file
+- Container application: Read/write access to token file (for refresh)
+- No file locking mechanism required (single-user, sequential access)
+- Token file MUST be excluded from version control (`.gitignore`)
 
 ---
 
@@ -328,10 +363,52 @@ grant_type=refresh_token&refresh_token={refresh_token}
 | `callback_host` | str | No | dirtydata.ai | Callback domain |
 | `callback_port` | int | No | 8443 | Callback server port |
 | `callback_path` | str | No | /oauth/callback | Callback URL path |
-| `token_file` | str | No | ~/.schwab_tokens.json | Token storage path |
+| `token_file` | str | No | /workspaces/options_income/.schwab_tokens.json | Token storage path (container-compatible) |
 | `ssl_cert_path` | str | No | /etc/letsencrypt/live/dirtydata.ai/fullchain.pem | SSL certificate |
 | `ssl_key_path` | str | No | /etc/letsencrypt/live/dirtydata.ai/privkey.pem | SSL private key |
 | `refresh_buffer_seconds` | int | No | 300 | Refresh before expiry |
+
+### 4.7 Container Deployment Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    HOST MACHINE                          │
+│                                                          │
+│  Authorization Script (authorize_schwab_host.py)        │
+│  ├─ Accesses SSL certs at /etc/letsencrypt             │
+│  ├─ Starts HTTPS server on port 8443                   │
+│  ├─ Receives OAuth callback                            │
+│  └─ Writes tokens to project/.schwab_tokens.json       │
+│                                                          │
+│  Project Directory: /workspaces/options_income/         │
+│  └─ .schwab_tokens.json ◄───────┐                      │
+└──────────────────────────────────┼──────────────────────┘
+                                   │ (workspace mount)
+┌──────────────────────────────────┼──────────────────────┐
+│                 DEVCONTAINER     │                       │
+│                                  │                       │
+│  Mounted: /workspaces/options_income/                   │
+│  └─ .schwab_tokens.json ◄────────┘                      │
+│                                                          │
+│  Application (wheel_strategy_tool)                      │
+│  ├─ Reads tokens from .schwab_tokens.json              │
+│  ├─ Makes Schwab API calls                             │
+│  ├─ Refreshes tokens when needed                       │
+│  └─ Writes updated tokens back to .schwab_tokens.json  │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+```
+
+**Execution Context Table**:
+
+| Operation | Runs On | Access Requirements | Token File Access |
+|-----------|---------|---------------------|-------------------|
+| Initial Authorization | HOST | SSL certs, port 8443 | Write |
+| Token Exchange | HOST | Network to Schwab API | Write |
+| Application Startup | CONTAINER | Token file readable | Read |
+| API Calls | CONTAINER | Network to Schwab API | Read |
+| Token Refresh | CONTAINER | Network to Schwab API | Read/Write |
+| Re-Authorization | HOST | SSL certs, port 8443 | Write (overwrite) |
 
 ---
 
@@ -339,16 +416,18 @@ grant_type=refresh_token&refresh_token={refresh_token}
 
 ### US-O1: Initial Authorization
 
-**As a** user setting up the system for the first time  
-**I want to** authorize the application to access my Schwab account  
+**As a** user setting up the system for the first time
+**I want to** authorize the application to access my Schwab account
 **So that** the system can retrieve my account data and market information
 
 **Acceptance Criteria:**
-- [ ] Running authorization script displays clear instructions
+- [ ] Running authorization script **on host** displays clear instructions
+- [ ] Script clearly indicates it must run outside devcontainer
 - [ ] Browser opens automatically to Schwab login page
 - [ ] After logging in and granting access, browser shows success message
-- [ ] Tokens are saved to local file
-- [ ] Subsequent API calls work without re-authorization
+- [ ] Tokens are saved to project directory (`.schwab_tokens.json`)
+- [ ] Subsequent API calls **from container** work without re-authorization
+- [ ] Documentation clearly explains host vs container execution
 
 ### US-O2: Automatic Token Refresh
 
@@ -442,6 +521,17 @@ grant_type=refresh_token&refresh_token={refresh_token}
 | AC-O18 | Schwab API call succeeds with token | Integration test (sandbox) |
 | AC-O19 | 401 response triggers appropriate error | Unit test |
 
+### 6.5 Container Architecture
+
+| # | Criterion | Verification |
+|---|-----------|--------------|
+| AC-O20 | Authorization script runs successfully on host | Manual test |
+| AC-O21 | Token file written to project directory | Manual test |
+| AC-O22 | Application in container reads tokens successfully | Integration test |
+| AC-O23 | Token refresh from container writes back successfully | Integration test |
+| AC-O24 | Same absolute path works in both contexts | Unit test |
+| AC-O25 | .gitignore excludes token file | Manual verification |
+
 ---
 
 ## 7. Dependencies
@@ -458,9 +548,11 @@ grant_type=refresh_token&refresh_token={refresh_token}
 | Component | Requirement |
 |-----------|-------------|
 | Domain | `dirtydata.ai` with dyndns |
-| SSL Certificate | Let's Encrypt for `dirtydata.ai` |
-| Port Forwarding | Router forwards 8443 → local machine |
+| SSL Certificate | Let's Encrypt for `dirtydata.ai` (accessible at `/etc/letsencrypt`) |
+| Port Forwarding | Router forwards 8443 → host machine |
 | Schwab App | Registered in Schwab Dev Portal |
+| Devcontainer | VS Code devcontainer with workspace mount |
+| SSL Mount | `/etc/letsencrypt` mounted read-only in devcontainer |
 
 ### 7.3 Schwab App Configuration
 
@@ -498,35 +590,42 @@ When creating the Schwab App in Dev Portal:
 ## 9. Implementation Phases
 
 ### Phase 1: Core OAuth (MVP)
-- Configuration loading
-- Token storage (file-based)
+- Configuration loading with container-compatible paths
+- Token storage (file-based in project directory)
 - Token manager (load, save, refresh check)
 - Basic coordinator interface
+- Path handling for host/container contexts
 
-**Deliverable:** Can store/load tokens, check expiry
+**Deliverable:** Can store/load tokens from shared location, check expiry
 
-### Phase 2: Authorization Flow
-- Callback server with HTTPS
+### Phase 2: Authorization Flow (Host Execution)
+- Standalone callback server script for host execution
+- HTTPS server with SSL certificate access
 - Authorization URL generation
 - Code exchange for tokens
 - Browser integration
+- Token file written to workspace directory
 
-**Deliverable:** Complete initial authorization flow
+**Deliverable:** Complete initial authorization flow running on host
 
-### Phase 3: Token Refresh
+### Phase 3: Token Refresh (Container Execution)
+- Token refresh from within container
 - Automatic refresh before expiry
 - Retry logic for network errors
 - Error handling for invalid refresh tokens
+- Write updated tokens back to shared file
 
-**Deliverable:** Unattended token management
+**Deliverable:** Unattended token management from container
 
 ### Phase 4: Integration & Testing
 - Integration with Schwab client module
-- Unit tests (>80% coverage)
-- Integration tests with Schwab sandbox
-- Documentation
+- Split execution testing (host auth, container usage)
+- Unit tests (>85% coverage)
+- Integration tests with container architecture
+- Container-specific documentation
+- `.gitignore` configuration
 
-**Deliverable:** Production-ready module
+**Deliverable:** Production-ready module with container support
 
 ---
 

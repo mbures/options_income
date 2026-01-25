@@ -207,11 +207,136 @@ finnhub-options/
 │   └── ...
 │
 ├── scripts/                        # NEW: Utility scripts
-│   └── authorize_schwab.py         # One-time auth script
+│   ├── authorize_schwab_host.py    # HOST: One-time auth (HTTPS server)
+│   └── check_schwab_auth.py        # CONTAINER: Check token status
+│
+├── .schwab_tokens.json             # NEW: Token storage (add to .gitignore)
 │
 └── config/                         # NEW: Configuration files
     └── schwab_oauth.example.json   # Example OAuth config
 ```
+
+### 2.4 Container Architecture (Devcontainer Deployment)
+
+**Critical Architectural Consideration**: This application runs inside a devcontainer, but the OAuth callback server must run on the host machine (requires SSL certificates and port 8443 access). This creates a split execution model.
+
+#### Split Execution Model
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         HOST MACHINE                             │
+│                                                                  │
+│  ┌────────────────────────────────────────────────┐             │
+│  │  scripts/authorize_schwab_host.py              │             │
+│  │  - Runs OAuth callback server (HTTPS)          │             │
+│  │  - Access to /etc/letsencrypt SSL certificates │             │
+│  │  - Listens on port 8443                        │             │
+│  │  - Receives authorization code                 │             │
+│  │  - Exchanges for tokens                        │             │
+│  │  - Writes to PROJECT/.schwab_tokens.json       │             │
+│  └────────────────────────────────────────────────┘             │
+│                         │                                        │
+│                         ▼                                        │
+│           /workspaces/options_income/.schwab_tokens.json         │
+│                         │ (workspace mount)                      │
+└─────────────────────────┼──────────────────────────────────────┘
+                          │
+┌─────────────────────────┼──────────────────────────────────────┐
+│                      DEVCONTAINER                   │            │
+│                                                     │            │
+│  /workspaces/options_income/.schwab_tokens.json ◄──┘            │
+│                         │                                        │
+│                         ▼                                        │
+│  ┌────────────────────────────────────────────────┐             │
+│  │  Main Application (wheel_strategy_tool)        │             │
+│  │  - Reads tokens from workspace file            │             │
+│  │  - Uses tokens for Schwab API calls            │             │
+│  │  - Refreshes tokens when needed                │             │
+│  │  - Writes updated tokens back to same file     │             │
+│  └────────────────────────────────────────────────┘             │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+#### Token File Location Strategy
+
+**Selected Approach: Project Directory (Option 1)**
+
+Token file location: `/workspaces/options_income/.schwab_tokens.json`
+
+**Rationale**:
+- ✅ Workspace is already mounted in devcontainer
+- ✅ Same absolute path in both host and container
+- ✅ No additional mount configuration needed
+- ✅ Simple path resolution (no context detection required)
+- ⚠️ Must add to `.gitignore` to prevent token exposure
+
+**Configuration**:
+```python
+# Default token file path in config.py
+token_file: str = "/workspaces/options_income/.schwab_tokens.json"
+```
+
+**Alternative Considered: Home Directory**
+- Token at `~/.schwab_tokens.json` (different paths in host/container)
+- ❌ Requires explicit devcontainer mount configuration
+- ❌ Path differs between contexts (needs detection logic)
+- ❌ More complex setup
+
+#### Execution Workflow
+
+**First-Time Authorization** (runs on HOST):
+1. Set environment variables on host: `SCHWAB_CLIENT_ID`, `SCHWAB_CLIENT_SECRET`
+2. Run: `python scripts/authorize_schwab_host.py`
+3. Script starts HTTPS server using host's SSL certificates
+4. Browser opens for Schwab authorization
+5. User logs in, grants access
+6. Callback received, tokens exchanged
+7. Tokens written to `/workspaces/options_income/.schwab_tokens.json`
+8. Authorization complete
+
+**Application Usage** (runs in CONTAINER):
+1. Run: `wheel recommend NVDA --broker schwab`
+2. Application reads tokens from `/workspaces/options_income/.schwab_tokens.json`
+3. Token manager automatically refreshes if expired
+4. Updated tokens written back to same file
+5. API calls proceed with valid token
+
+**Key Design Implications**:
+- OAuth callback server code must be runnable standalone (outside container)
+- Token storage must support shared file access (host writes, container reads/writes)
+- Configuration must use absolute paths that work in both contexts
+- Documentation must clearly specify which scripts run where
+- No special path detection logic needed (same path everywhere)
+
+#### Devcontainer Configuration
+
+**Required `.devcontainer/devcontainer.json` entries**:
+
+```json
+{
+  "mounts": [
+    "source=/etc/letsencrypt,target=/etc/letsencrypt,type=bind,readonly"
+  ]
+}
+```
+
+**Note**: Workspace mount (`/workspaces/options_income`) is automatic; no additional mount needed for token file.
+
+**`.gitignore` addition**:
+```
+# Schwab OAuth tokens (contains sensitive credentials)
+.schwab_tokens.json
+```
+
+#### Security Considerations for Container Architecture
+
+| Aspect | Implementation | Notes |
+|--------|----------------|-------|
+| Token File Permissions | Set by host script (chmod 600) | Container inherits permissions |
+| File Locking | Not required | Single-user, sequential access |
+| Path Exposure | Absolute path in code | Same in both contexts, no dynamic resolution |
+| SSL Certificate Access | Mounted read-only from host | Container cannot modify certs |
 
 ---
 
@@ -228,27 +353,27 @@ import os
 @dataclass
 class SchwabOAuthConfig:
     """Configuration for Schwab OAuth 2.0."""
-    
+
     # Required - from Schwab Dev Portal
     client_id: str
     client_secret: str
-    
+
     # Callback configuration
     callback_host: str = "dirtydata.ai"
     callback_port: int = 8443
     callback_path: str = "/oauth/callback"
-    
+
     # Schwab OAuth endpoints
     authorization_url: str = "https://api.schwabapi.com/v1/oauth/authorize"
     token_url: str = "https://api.schwabapi.com/v1/oauth/token"
-    
-    # Token storage
-    token_file: str = field(default_factory=lambda: os.path.expanduser("~/.schwab_tokens.json"))
-    
-    # SSL certificate paths (for callback server)
+
+    # Token storage (project directory for devcontainer compatibility)
+    token_file: str = "/workspaces/options_income/.schwab_tokens.json"
+
+    # SSL certificate paths (for callback server on HOST)
     ssl_cert_path: str = "/etc/letsencrypt/live/dirtydata.ai/fullchain.pem"
     ssl_key_path: str = "/etc/letsencrypt/live/dirtydata.ai/privkey.pem"
-    
+
     # Token refresh settings
     refresh_buffer_seconds: int = 300  # Refresh 5 min before expiry
     
@@ -276,8 +401,8 @@ class SchwabOAuthConfig:
             callback_host=os.environ.get("SCHWAB_CALLBACK_HOST", "dirtydata.ai"),
             callback_port=int(os.environ.get("SCHWAB_CALLBACK_PORT", "8443")),
             token_file=os.environ.get(
-                "SCHWAB_TOKEN_FILE", 
-                os.path.expanduser("~/.schwab_tokens.json")
+                "SCHWAB_TOKEN_FILE",
+                "/workspaces/options_income/.schwab_tokens.json"
             ),
         )
 ```
@@ -1140,41 +1265,78 @@ For multi-user or more secure deployments:
 
 ### 8.1 Prerequisites
 
-- [ ] Let's Encrypt certificate for `dirtydata.ai`
-- [ ] Port 8443 forwarded on router
+- [ ] Let's Encrypt certificate for `dirtydata.ai` accessible at `/etc/letsencrypt`
+- [ ] Port 8443 forwarded on router to host machine
 - [ ] Schwab App registered with callback URL `https://dirtydata.ai:8443/oauth/callback`
-- [ ] Environment variables set:
+- [ ] Devcontainer has SSL certificates mounted (already configured in `.devcontainer/devcontainer.json`)
+- [ ] Environment variables set **on HOST**:
   - `SCHWAB_CLIENT_ID`
   - `SCHWAB_CLIENT_SECRET`
 
-### 8.2 First-Time Setup
+### 8.2 First-Time Setup (HOST Machine)
+
+**Important**: Authorization must run on the HOST, not in the devcontainer.
 
 ```bash
-# 1. Install dependencies
+# 1. Install dependencies ON HOST
 pip install flask requests
 
-# 2. Set environment variables
+# 2. Set environment variables ON HOST
 export SCHWAB_CLIENT_ID="your_client_id"
 export SCHWAB_CLIENT_SECRET="your_client_secret"
 
-# 3. Run authorization
-python -m scripts.authorize_schwab
+# 3. Navigate to project directory ON HOST
+cd /workspaces/options_income
 
-# 4. Verify tokens saved
-cat ~/.schwab_tokens.json
+# 4. Run authorization script ON HOST
+python scripts/authorize_schwab_host.py
+
+# 5. Browser opens automatically for Schwab login
+# Complete authorization in browser
+
+# 6. Verify tokens saved
+cat /workspaces/options_income/.schwab_tokens.json
+
+# 7. Add to .gitignore if not already present
+echo ".schwab_tokens.json" >> .gitignore
 ```
 
-### 8.3 Ongoing Operation
+### 8.3 Application Usage (CONTAINER)
 
-Once authorized, the system will:
-1. Load tokens from `~/.schwab_tokens.json`
-2. Auto-refresh before expiry
+Once authorized, use the application normally **inside the devcontainer**:
+
+```bash
+# Inside devcontainer
+wheel recommend NVDA --broker schwab
+```
+
+The application will:
+1. Load tokens from `/workspaces/options_income/.schwab_tokens.json`
+2. Auto-refresh before expiry (writes back to same file)
 3. Make API calls with valid Bearer token
 
-Re-authorization only needed if:
+### 8.4 Token Management
+
+**Token Location**: `/workspaces/options_income/.schwab_tokens.json`
+- Written by host authorization script
+- Read/refreshed by container application
+- Same path in both contexts (workspace mount)
+
+**Re-authorization needed if**:
 - Refresh token expires (typically 7 days of inactivity)
 - User revokes access in Schwab account settings
-- Token file is deleted
+- Token file is deleted or corrupted
+
+**To re-authorize**: Run `python scripts/authorize_schwab_host.py` again on HOST
+
+### 8.5 Troubleshooting Container Issues
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| "Token file not found" | Authorization not run | Run `authorize_schwab_host.py` on HOST |
+| "Permission denied" writing tokens | File permissions | Check file ownership, run `chmod 600` on token file |
+| "SSL certificate not found" | Missing mount | Verify `/etc/letsencrypt` mount in devcontainer.json |
+| Token refresh fails | Network from container | Check container networking, verify Schwab API accessible |
 
 ---
 
