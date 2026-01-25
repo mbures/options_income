@@ -145,6 +145,20 @@ for result in results:
     print(f"{result.symbol}: {len(result.recommended_strikes)} recommendations")
 ```
 
+### Charles Schwab API Integration
+Integration requires creating an app on their platform. This system generates API keys that are then used to make calls to their API. The process of claiming these API keys(which expire) is OAuth2. This requires a server to register callbacks against to facilitate the security handshake process.
+
+This process uses certificates - these certificates live on the host machine and are provided by letsencrypt. This is facilitated by a process that runs on the machine periodically to renew the certificate. When this happens, port 80 must be open.
+
+Information about the certificates and the next renewal:
+
+Successfully received certificate.
+Certificate is saved at: /etc/letsencrypt/live/dirtydata.ai/fullchain.pem
+Key is saved at:         /etc/letsencrypt/live/dirtydata.ai/privkey.pem
+This certificate expires on 2026-04-22.
+These files will be updated when the certificate renews.
+Certbot has set up a scheduled task to automatically renew this certificate in the background.
+
 ### Ladder Builder
 
 ```python

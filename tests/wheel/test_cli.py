@@ -29,8 +29,10 @@ def runner() -> CliRunner:
 class TestInitCommand:
     """Tests for 'wheel init' command."""
 
-    def test_init_creates_wheel(self, runner: CliRunner, temp_db: str) -> None:
-        """wheel init should create a new wheel."""
+    def test_init_with_capital_creates_cash_wheel(
+        self, runner: CliRunner, temp_db: str
+    ) -> None:
+        """wheel init --capital should create a wheel in CASH state."""
         result = runner.invoke(
             cli,
             ["--db", temp_db, "init", "AAPL", "--capital", "10000"],
@@ -39,6 +41,73 @@ class TestInitCommand:
         assert result.exit_code == 0
         assert "Created wheel for AAPL" in result.output
         assert "$10,000.00 capital" in result.output
+        assert "cash" in result.output.lower()
+        assert "sell puts" in result.output.lower()
+
+    def test_init_with_shares_creates_shares_wheel(
+        self, runner: CliRunner, temp_db: str
+    ) -> None:
+        """wheel init --shares should create a wheel in SHARES state."""
+        result = runner.invoke(
+            cli,
+            [
+                "--db", temp_db,
+                "init", "AAPL",
+                "--shares", "200",
+                "--cost-basis", "150.00",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "Created wheel for AAPL" in result.output
+        assert "200 shares" in result.output
+        assert "$150.00" in result.output
+        assert "shares" in result.output.lower()
+        assert "sell calls" in result.output.lower()
+
+    def test_init_with_both_capital_and_shares(
+        self, runner: CliRunner, temp_db: str
+    ) -> None:
+        """wheel init with both --capital and --shares should work."""
+        result = runner.invoke(
+            cli,
+            [
+                "--db", temp_db,
+                "init", "AAPL",
+                "--capital", "5000",
+                "--shares", "100",
+                "--cost-basis", "145.00",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "100 shares" in result.output
+        assert "Additional capital" in result.output
+        assert "$5,000.00" in result.output
+
+    def test_init_shares_without_cost_basis_fails(
+        self, runner: CliRunner, temp_db: str
+    ) -> None:
+        """wheel init --shares without --cost-basis should fail."""
+        result = runner.invoke(
+            cli,
+            ["--db", temp_db, "init", "AAPL", "--shares", "100"],
+        )
+
+        assert result.exit_code == 1
+        assert "cost-basis" in result.output.lower()
+
+    def test_init_without_capital_or_shares_fails(
+        self, runner: CliRunner, temp_db: str
+    ) -> None:
+        """wheel init without --capital or --shares should fail."""
+        result = runner.invoke(
+            cli,
+            ["--db", temp_db, "init", "AAPL"],
+        )
+
+        assert result.exit_code == 1
+        assert "Must specify" in result.output
 
     def test_init_with_profile(self, runner: CliRunner, temp_db: str) -> None:
         """wheel init should accept profile option."""

@@ -25,6 +25,7 @@ This document tracks the implementation progress of the Covered Options Strategy
 | Phase 6 | Weekly Overlay Scanner & Broker Workflow | ✅ Complete | 100% |
 | Phase 7 | Ladder Builder | ✅ Complete | 100% |
 | Phase 8 | Risk Analysis & Polish | ✅ Complete | 100% |
+| Phase 9 | Schwab OAuth Integration | 🔄 In Progress | 0% |
 
 ---
 
@@ -289,6 +290,292 @@ This document tracks the implementation progress of the Covered Options Strategy
 
 ---
 
+### Sprint 7: Phase 9.1 - OAuth Core Infrastructure (Est. 8 story points) 🔄 IN PROGRESS
+
+**Goal**: Implement core OAuth 2.0 infrastructure for Schwab API integration including configuration, token storage, and token lifecycle management.
+
+#### S7.1: OAuth Configuration Module (2 pts) ⬜
+- [ ] **S7.1.1**: Create `src/oauth/` module directory structure
+- [ ] **S7.1.2**: Create `src/oauth/config.py` with `SchwabOAuthConfig` dataclass
+- [ ] **S7.1.3**: Implement environment variable loading (`from_env()` classmethod)
+- [ ] **S7.1.4**: Add configuration validation (client_id, client_secret, ports, paths)
+- [ ] **S7.1.5**: Implement `callback_url` property generation
+- [ ] **S7.1.6**: Add support for custom SSL certificate paths
+- [ ] **S7.1.7**: Create unit tests for config loading and validation
+
+**Requirements**: FR-O1, FR-O2, FR-O3 from oauth_requirements.md
+**Dependencies**: None
+**Deliverable**: Configuration management with environment variable support
+
+#### S7.2: Token Storage Implementation (2 pts) ⬜
+- [ ] **S7.2.1**: Create `src/oauth/token_storage.py` module
+- [ ] **S7.2.2**: Implement `TokenData` dataclass with all fields
+- [ ] **S7.2.3**: Add expiry calculation methods (`is_expired`, `expires_within`)
+- [ ] **S7.2.4**: Implement `TokenStorage` class with file-based persistence
+- [ ] **S7.2.5**: Add JSON serialization/deserialization methods
+- [ ] **S7.2.6**: Set secure file permissions (chmod 600) on token file
+- [ ] **S7.2.7**: Handle corrupted/missing files gracefully
+- [ ] **S7.2.8**: Create unit tests for storage operations (target: >95% coverage)
+
+**Requirements**: FR-O8, FR-O9, FR-O10, NFR-O8 from oauth_requirements.md
+**Dependencies**: S7.1 (config)
+**Deliverable**: Secure file-based token persistence
+
+#### S7.3: Token Manager Core (2 pts) ⬜
+- [ ] **S7.3.1**: Create `src/oauth/token_manager.py` module
+- [ ] **S7.3.2**: Implement `TokenManager` class initialization
+- [ ] **S7.3.3**: Implement `exchange_code_for_tokens()` method
+- [ ] **S7.3.4**: Implement `refresh_tokens()` method with retry logic
+- [ ] **S7.3.5**: Implement `get_valid_access_token()` with auto-refresh
+- [ ] **S7.3.6**: Add `is_authorized()` and `get_token_status()` methods
+- [ ] **S7.3.7**: Implement `revoke()` for local token deletion
+- [ ] **S7.3.8**: Add Basic Auth header generation for token requests
+- [ ] **S7.3.9**: Create custom exceptions (TokenExchangeError, TokenRefreshError, etc.)
+
+**Requirements**: FR-O7, FR-O11, FR-O12, FR-O13, FR-O15, NFR-O4 from oauth_requirements.md
+**Dependencies**: S7.2 (token storage)
+**Deliverable**: Complete token lifecycle management
+
+#### S7.4: Error Handling & Logging (2 pts) ⬜
+- [ ] **S7.4.1**: Create `src/oauth/exceptions.py` with error hierarchy
+- [ ] **S7.4.2**: Implement `SchwabOAuthError` base class
+- [ ] **S7.4.3**: Add specific exception classes (ConfigurationError, AuthorizationError, etc.)
+- [ ] **S7.4.4**: Implement comprehensive logging throughout OAuth module
+- [ ] **S7.4.5**: Add retry logic with exponential backoff for network errors
+- [ ] **S7.4.6**: Ensure client_secret never appears in logs or errors
+- [ ] **S7.4.7**: Add clear, actionable error messages with recovery guidance
+- [ ] **S7.4.8**: Create unit tests for error scenarios
+
+**Requirements**: FR-O14, NFR-O4, NFR-O5, NFR-O7, NFR-O11 from oauth_requirements.md
+**Dependencies**: S7.1, S7.2, S7.3
+**Deliverable**: Robust error handling with security-conscious logging
+
+**Acceptance Criteria**:
+- AC-O1: Configuration loads from environment variables
+- AC-O7: Tokens load correctly from file
+- AC-O8: Token expiry calculated correctly
+- AC-O10: Refresh updates stored tokens
+- AC-O11: get_access_token returns valid token
+- AC-O12: Missing tokens raise clear exception
+
+---
+
+### Sprint 8: Phase 9.2 - OAuth Authorization Flow (Est. 10 story points) ⬜ PLANNED
+
+**Goal**: Implement OAuth 2.0 Authorization Code flow with HTTPS callback server and browser integration.
+
+#### S8.1: HTTPS Callback Server (3 pts) ⬜
+- [ ] **S8.1.1**: Create `src/oauth/auth_server.py` module
+- [ ] **S8.1.2**: Implement `OAuthCallbackServer` class using Flask
+- [ ] **S8.1.3**: Configure SSL context with Let's Encrypt certificates
+- [ ] **S8.1.4**: Implement `/oauth/callback` route handler
+- [ ] **S8.1.5**: Parse authorization code from callback URL
+- [ ] **S8.1.6**: Handle OAuth error responses (error, error_description)
+- [ ] **S8.1.7**: Serve user-friendly HTML success/failure pages
+- [ ] **S8.1.8**: Implement `/oauth/status` endpoint for debugging
+- [ ] **S8.1.9**: Add server start/stop methods with threading support
+
+**Requirements**: FR-O5, NFR-O1, NFR-O9 from oauth_requirements.md
+**Dependencies**: S7.1 (config)
+**Deliverable**: HTTPS callback server that receives authorization codes
+
+#### S8.2: Authorization URL Generation & Browser Flow (2 pts) ⬜
+- [ ] **S8.2.1**: Implement `generate_authorization_url()` method
+- [ ] **S8.2.2**: Add correct query parameters (client_id, redirect_uri, response_type)
+- [ ] **S8.2.3**: Implement automatic browser opening with `webbrowser` module
+- [ ] **S8.2.4**: Display authorization URL in console for manual copy
+- [ ] **S8.2.5**: Add configurable timeout for callback waiting (default: 5 minutes)
+- [ ] **S8.2.6**: Create `AuthorizationResult` dataclass for flow results
+- [ ] **S8.2.7**: Handle timeout scenarios gracefully
+
+**Requirements**: FR-O4, FR-O6 from oauth_requirements.md
+**Dependencies**: S8.1 (callback server)
+**Deliverable**: Browser-integrated authorization flow
+
+#### S8.3: Complete Authorization Flow Orchestration (2 pts) ⬜
+- [ ] **S8.3.1**: Implement `run_authorization_flow()` function
+- [ ] **S8.3.2**: Coordinate server start, URL generation, and callback waiting
+- [ ] **S8.3.3**: Exchange authorization code for tokens upon success
+- [ ] **S8.3.4**: Save tokens immediately after exchange
+- [ ] **S8.3.5**: Ensure server cleanup on success, failure, and timeout
+- [ ] **S8.3.6**: Add comprehensive logging for flow progress
+- [ ] **S8.3.7**: Return clear success/failure indication to caller
+
+**Requirements**: FR-O7, US-O1 from oauth_requirements.md
+**Dependencies**: S7.3 (token manager), S8.1 (callback server), S8.2 (URL generation)
+**Deliverable**: End-to-end authorization flow
+
+#### S8.4: OAuth Coordinator High-Level Interface (2 pts) ⬜
+- [ ] **S8.4.1**: Create `src/oauth/coordinator.py` module
+- [ ] **S8.4.2**: Implement `OAuthCoordinator` class as main interface
+- [ ] **S8.4.3**: Add `ensure_authorized()` method with auto-flow triggering
+- [ ] **S8.4.4**: Implement `get_access_token()` for API client usage
+- [ ] **S8.4.5**: Add `get_authorization_header()` helper method
+- [ ] **S8.4.6**: Implement `is_authorized()` status check
+- [ ] **S8.4.7**: Add `get_status()` for diagnostics and troubleshooting
+- [ ] **S8.4.8**: Implement `revoke()` for authorization cleanup
+
+**Requirements**: FR-O12, FR-O13, US-O3 from oauth_requirements.md
+**Dependencies**: S7.3 (token manager), S8.3 (auth flow)
+**Deliverable**: Simple, high-level OAuth interface for application use
+
+#### S8.5: Authorization Script & User Experience (1 pt) ⬜
+- [ ] **S8.5.1**: Create `scripts/authorize_schwab.py` utility script
+- [ ] **S8.5.2**: Add clear instructions and progress feedback
+- [ ] **S8.5.3**: Verify token file creation and permissions
+- [ ] **S8.5.4**: Display authorization status and token expiry
+- [ ] **S8.5.5**: Add `--revoke` flag for token cleanup
+- [ ] **S8.5.6**: Test complete user journey from initial auth to API access
+
+**Requirements**: US-O1, US-O4, US-O5, NFR-O12 from oauth_requirements.md
+**Dependencies**: S8.4 (coordinator)
+**Deliverable**: User-friendly authorization utility
+
+**Acceptance Criteria**:
+- AC-O1: Callback server starts on configured port with HTTPS
+- AC-O2: Authorization URL contains correct parameters
+- AC-O3: Callback correctly extracts authorization code
+- AC-O4: Token exchange returns valid tokens
+- AC-O5: Tokens saved to configured file
+- AC-O6: Error responses handled gracefully
+
+---
+
+### Sprint 9: Phase 9.3 - Schwab API Client & Integration (Est. 9 story points) ⬜ PLANNED
+
+**Goal**: Build Schwab API client with OAuth integration and connect to wheel strategy system.
+
+#### S9.1: Schwab API Client Foundation (3 pts) ⬜
+- [ ] **S9.1.1**: Create `src/schwab/` module directory
+- [ ] **S9.1.2**: Create `src/schwab/client.py` with `SchwabClient` class
+- [ ] **S9.1.3**: Integrate `OAuthCoordinator` for authentication
+- [ ] **S9.1.4**: Implement `_request()` method with automatic token refresh
+- [ ] **S9.1.5**: Handle 401 responses with clear re-authorization messages
+- [ ] **S9.1.6**: Add request/response logging (excluding sensitive data)
+- [ ] **S9.1.7**: Implement retry logic for transient errors
+- [ ] **S9.1.8**: Create `SchwabAuthenticationError` exception
+
+**Requirements**: Section 4.1 from oauth_design.md
+**Dependencies**: Sprint 8 (OAuth coordinator)
+**Deliverable**: Authenticated HTTP client for Schwab APIs
+
+#### S9.2: Schwab Market Data Endpoints (2 pts) ⬜
+- [ ] **S9.2.1**: Create `src/schwab/endpoints.py` for API endpoint definitions
+- [ ] **S9.2.2**: Implement `get_quote()` method for real-time quotes
+- [ ] **S9.2.3**: Implement `get_option_chain()` method
+- [ ] **S9.2.4**: Parse Schwab options chain format to internal `OptionsChain` model
+- [ ] **S9.2.5**: Add error handling for invalid symbols
+- [ ] **S9.2.6**: Cache Schwab responses using existing cache infrastructure
+- [ ] **S9.2.7**: Create unit tests with mocked Schwab responses
+
+**Requirements**: Section 4.1 from oauth_design.md
+**Dependencies**: S9.1 (client foundation)
+**Deliverable**: Market data API methods
+
+#### S9.3: Schwab Account Data Endpoints (2 pts) ⬜
+- [ ] **S9.3.1**: Implement `get_accounts()` method
+- [ ] **S9.3.2**: Implement `get_account_positions()` method
+- [ ] **S9.3.3**: Create `src/schwab/models.py` for Schwab-specific data models
+- [ ] **S9.3.4**: Define `SchwabAccount`, `SchwabPosition` dataclasses
+- [ ] **S9.3.5**: Parse account/position data from Schwab format
+- [ ] **S9.3.6**: Add integration with wheel strategy for position import
+- [ ] **S9.3.7**: Create unit tests for account data parsing
+
+**Requirements**: Section 2.1 from oauth_requirements.md (Business Context)
+**Dependencies**: S9.1 (client foundation)
+**Deliverable**: Account data retrieval methods
+
+#### S9.4: Wheel Strategy Schwab Integration (2 pts) ⬜
+- [ ] **S9.4.1**: Add Schwab client option to `WheelManager.__init__()`
+- [ ] **S9.4.2**: Update `RecommendEngine` to support Schwab as data source
+- [ ] **S9.4.3**: Add `--broker schwab` option to wheel CLI
+- [ ] **S9.4.4**: Implement automatic position import from Schwab accounts
+- [ ] **S9.4.5**: Add configuration option for preferred data source
+- [ ] **S9.4.6**: Update CLI to show data source in status output
+- [ ] **S9.4.7**: Add fallback to Finnhub if Schwab unavailable
+
+**Requirements**: Integration requirements
+**Dependencies**: S9.2, S9.3 (Schwab endpoints), existing wheel strategy
+**Deliverable**: Schwab integration in wheel strategy tool
+
+**Acceptance Criteria**:
+- AC-O17: Authorization header format correct
+- AC-O18: Schwab API call succeeds with token
+- AC-O19: 401 response triggers appropriate error
+- Wheel CLI can fetch data from Schwab
+- Position import works from Schwab accounts
+
+---
+
+### Sprint 10: Phase 9.4 - Testing, Documentation & Deployment (Est. 8 story points) ⬜ PLANNED
+
+**Goal**: Comprehensive testing, documentation, and production deployment of OAuth integration.
+
+#### S10.1: Unit Tests (3 pts) ⬜
+- [ ] **S10.1.1**: Create `tests/oauth/test_config.py` (target: 100% coverage)
+- [ ] **S10.1.2**: Create `tests/oauth/test_token_storage.py` (target: 95% coverage)
+- [ ] **S10.1.3**: Create `tests/oauth/test_token_manager.py` (target: 90% coverage)
+- [ ] **S10.1.4**: Create `tests/oauth/test_auth_server.py` (target: 80% coverage)
+- [ ] **S10.1.5**: Create `tests/oauth/test_coordinator.py` (target: 85% coverage)
+- [ ] **S10.1.6**: Create `tests/schwab/test_client.py` (target: 85% coverage)
+- [ ] **S10.1.7**: Mock all external API calls (Schwab OAuth, Schwab API)
+- [ ] **S10.1.8**: Test all error paths and edge cases
+
+**Requirements**: Section 10 from oauth_requirements.md, NFR-O14
+**Dependencies**: Sprints 7, 8, 9 (all implementation)
+**Deliverable**: >85% test coverage for OAuth module
+
+#### S10.2: Integration Tests (2 pts) ⬜
+- [ ] **S10.2.1**: Create mock Schwab OAuth server for integration testing
+- [ ] **S10.2.2**: Test complete authorization flow end-to-end
+- [ ] **S10.2.3**: Test token refresh cycle simulation
+- [ ] **S10.2.4**: Test error recovery scenarios (network failures, expired tokens)
+- [ ] **S10.2.5**: Test OAuth + Schwab API integration
+- [ ] **S10.2.6**: Test wheel strategy with Schwab data source
+- [ ] **S10.2.7**: Validate against Schwab sandbox environment (if available)
+
+**Requirements**: Section 10.3 from oauth_requirements.md
+**Dependencies**: S10.1 (unit tests)
+**Deliverable**: Integration test suite
+
+#### S10.3: Documentation (2 pts) ⬜
+- [ ] **S10.3.1**: Create `docs/SCHWAB_OAUTH_SETUP.md` with detailed setup instructions
+- [ ] **S10.3.2**: Document Schwab Developer Portal app registration
+- [ ] **S10.3.3**: Document SSL certificate setup (Let's Encrypt)
+- [ ] **S10.3.4**: Document port forwarding configuration
+- [ ] **S10.3.5**: Create troubleshooting guide for common OAuth errors
+- [ ] **S10.3.6**: Update main README.md with Schwab integration section
+- [ ] **S10.3.7**: Add code documentation (docstrings) to all OAuth modules
+- [ ] **S10.3.8**: Create example usage scripts
+
+**Requirements**: Section 11 from oauth_requirements.md, NFR-O13, NFR-O15
+**Dependencies**: Sprints 7, 8, 9
+**Deliverable**: Complete documentation package
+
+#### S10.4: Manual Testing & Production Deployment (1 pt) ⬜
+- [ ] **S10.4.1**: Verify Schwab Dev Portal app configuration
+- [ ] **S10.4.2**: Test Let's Encrypt certificate renewal process
+- [ ] **S10.4.3**: Verify port forwarding (8443 → local machine)
+- [ ] **S10.4.4**: Run complete manual test checklist (Section 10.4 from requirements)
+- [ ] **S10.4.5**: Test fresh install authorization flow
+- [ ] **S10.4.6**: Test token auto-refresh after 25 minutes
+- [ ] **S10.4.7**: Test re-authorization after token expiry
+- [ ] **S10.4.8**: Verify production wheel CLI with Schwab data
+
+**Requirements**: Section 8 from oauth_design.md (Deployment Checklist)
+**Dependencies**: S10.3 (documentation)
+**Deliverable**: Production-ready OAuth integration
+
+**Acceptance Criteria**:
+- OAuth module >85% test coverage
+- All manual test scenarios pass
+- Documentation complete and accurate
+- Wheel CLI successfully uses Schwab data
+- Token refresh works automatically
+- Re-authorization process is smooth
+
+---
+
 ## Completed Work
 
 ### Phase 1: Core Data Infrastructure ✅
@@ -346,6 +633,20 @@ This document tracks the implementation progress of the Covered Options Strategy
 | `src/risk_analyzer.py` | 95% | 90% | ✅ Exceeds target |
 | `src/earnings_calendar.py` | 98% | 90% | ✅ Exceeds target |
 | **Overall** | 79% | **80%** | 446 tests passing |
+
+### OAuth Module Coverage Goals (Phase 9)
+
+| Module | Target | Status | Notes |
+|--------|--------|--------|-------|
+| `src/oauth/config.py` | 100% | ⬜ | Configuration management |
+| `src/oauth/token_storage.py` | 95% | ⬜ | Token persistence |
+| `src/oauth/token_manager.py` | 90% | ⬜ | Token lifecycle |
+| `src/oauth/auth_server.py` | 80% | ⬜ | Flask callback server |
+| `src/oauth/coordinator.py` | 85% | ⬜ | High-level interface |
+| `src/oauth/exceptions.py` | 100% | ⬜ | Error classes |
+| `src/schwab/client.py` | 85% | ⬜ | Schwab API client |
+| `src/schwab/models.py` | 100% | ⬜ | Data models |
+| **OAuth Overall** | **>85%** | ⬜ | Target for Phase 9 |
 
 ---
 
@@ -430,6 +731,30 @@ This document tracks the implementation progress of the Covered Options Strategy
 | AC-34 | Complete calculation in <500ms | ⬜ |
 | AC-35 | README provides clear setup instructions | ⬜ Partial |
 
+### OAuth Integration (AC-O1 to AC-O19)
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| AC-O1 | Callback server starts on configured port with HTTPS | ⬜ |
+| AC-O2 | Authorization URL contains correct parameters | ⬜ |
+| AC-O3 | Callback correctly extracts authorization code | ⬜ |
+| AC-O4 | Token exchange returns valid tokens | ⬜ |
+| AC-O5 | Tokens saved to configured file | ⬜ |
+| AC-O6 | Error responses handled gracefully | ⬜ |
+| AC-O7 | Tokens load correctly from file | ⬜ |
+| AC-O8 | Token expiry calculated correctly | ⬜ |
+| AC-O9 | Auto-refresh triggers before expiry | ⬜ |
+| AC-O10 | Refresh updates stored tokens | ⬜ |
+| AC-O11 | get_access_token returns valid token | ⬜ |
+| AC-O12 | Missing tokens raise clear exception | ⬜ |
+| AC-O13 | Missing config raises ConfigurationError | ⬜ |
+| AC-O14 | Network errors trigger retry | ⬜ |
+| AC-O15 | Invalid refresh token raises clear error | ⬜ |
+| AC-O16 | Corrupted token file handled | ⬜ |
+| AC-O17 | Authorization header format correct | ⬜ |
+| AC-O18 | Schwab API call succeeds with token | ⬜ |
+| AC-O19 | 401 response triggers appropriate error | ⬜ |
+
 ---
 
 ## Dependencies & Blockers
@@ -439,6 +764,11 @@ This document tracks the implementation progress of the Covered Options Strategy
 | Alpha Vantage API key | Dependency | ✅ | User has key |
 | Finnhub API key | Dependency | ✅ | User has key |
 | TIME_SERIES_DAILY_ADJUSTED response structure | Dependency | ✅ | Documented in PRD |
+| Schwab Developer Portal App | Dependency | ⬜ | Must register app for OAuth credentials |
+| Domain with SSL (dirtydata.ai) | Dependency | ⬜ | Required for HTTPS callback |
+| Let's Encrypt SSL Certificate | Dependency | ⬜ | For callback server HTTPS |
+| Port 8443 forwarding | Dependency | ⬜ | Router must forward to local machine |
+| Schwab OAuth Sandbox Access | Optional | ⬜ | For integration testing (if available) |
 
 ---
 
@@ -456,6 +786,29 @@ This document tracks the implementation progress of the Covered Options Strategy
 - Performance validated: 300 core calculations in 68ms (< 500ms requirement)
 - Each sprint deliverable should include updated unit tests
 
+### OAuth Module Notes
+
+- Phase 9 adds Schwab API integration via OAuth 2.0 Authorization Code flow
+- OAuth implementation follows security best practices:
+  - Client secret in environment variables only
+  - Token file restricted to user-only permissions (chmod 600)
+  - No sensitive data in logs or error messages
+  - HTTPS required for callback server
+- Infrastructure prerequisites:
+  - Domain with DNS (dirtydata.ai with dyndns)
+  - Let's Encrypt SSL certificate
+  - Port forwarding configured (8443 → local)
+  - Schwab Developer Portal app registered
+- Design documents:
+  - `docs/oauth_design.md` - Technical architecture and specifications
+  - `docs/oauth_requirements.md` - Functional and non-functional requirements
+- Estimated timeline: 4 sprints (35 story points total)
+- OAuth module will enable:
+  - Live market data from Schwab
+  - Automatic position import from brokerage accounts
+  - Foundation for future order placement features
+  - Higher quality data from primary source (broker)
+
 ---
 
 ## Document History
@@ -469,3 +822,4 @@ This document tracks the implementation progress of the Covered Options Strategy
 | 1.4 | 2026-01-19 | Software Developer | Sprint 4 complete: Overlay Scanner module fully implemented with 70 tests and 94% coverage. All Sprint 4 acceptance criteria met. |
 | 1.5 | 2026-01-20 | Software Developer | Sprint 5 complete: Ladder Builder module implemented with 40 tests and 91% coverage. Features: weekly expiration detection (Friday/Wednesday/Monday), allocation strategies (Equal/FrontWeighted/BackWeighted), sigma adjustment by week, earnings integration. All Sprint 5 acceptance criteria met. |
 | 1.6 | 2026-01-20 | Software Developer | Sprint 6 complete: Risk Analyzer module implemented with 31 tests (95% coverage). Features: income metrics (annualized yield, returns, breakevens), risk metrics (expected value, opportunity cost, Sharpe-like ratio), scenario analysis engine, strategy comparison. EarningsEvent dataclass added with 23 tests (98% coverage). README.md created. All Sprint 6 acceptance criteria met. |
+| 1.7 | 2026-01-25 | Software Developer | Added Phase 9: Schwab OAuth Integration. Analyzed oauth_design.md and oauth_requirements.md to create phased development plan across 4 sprints (35 story points). Sprints 7-10 cover: OAuth core infrastructure, authorization flow, Schwab API client integration, and comprehensive testing/documentation. Added OAuth-specific acceptance criteria (AC-O1 to AC-O19), infrastructure dependencies, and implementation notes. |

@@ -11,6 +11,11 @@ from typing import Optional
 
 import click
 
+from src.cache import LocalFileCache
+from src.config import AlphaVantageConfig, FinnhubConfig
+from src.finnhub_client import FinnhubClient
+from src.price_fetcher import AlphaVantagePriceDataFetcher
+
 from .exceptions import (
     DuplicateSymbolError,
     InsufficientCapitalError,
@@ -150,14 +155,49 @@ def cli(ctx: click.Context, db: str, verbose: bool, output_json: bool) -> None:
     Biases toward premium collection over assignment.
     """
     ctx.ensure_object(dict)
-    ctx.obj["manager"] = WheelManager(db_path=db)
+
+    # Load API configurations
+    finnhub_client = None
+    price_fetcher = None
+
+    try:
+        # Try to load Finnhub configuration
+        finnhub_config = FinnhubConfig.from_file()
+        finnhub_client = FinnhubClient(finnhub_config)
+        if verbose:
+            click.echo("✓ Finnhub client configured")
+    except (FileNotFoundError, ValueError) as e:
+        if verbose:
+            click.echo(f"⚠ Finnhub not configured: {e}", err=True)
+
+    try:
+        # Try to load Alpha Vantage configuration
+        av_config = AlphaVantageConfig.from_file()
+        file_cache = LocalFileCache()
+        price_fetcher = AlphaVantagePriceDataFetcher(
+            av_config, enable_cache=True, file_cache=file_cache
+        )
+        if verbose:
+            click.echo("✓ Alpha Vantage price fetcher configured")
+    except (FileNotFoundError, ValueError) as e:
+        if verbose:
+            click.echo(f"⚠ Alpha Vantage not configured: {e}", err=True)
+
+    # Initialize WheelManager with configured clients
+    ctx.obj["manager"] = WheelManager(
+        db_path=db,
+        finnhub_client=finnhub_client,
+        price_fetcher=price_fetcher,
+    )
     ctx.obj["verbose"] = verbose
     ctx.obj["json"] = output_json
 
 
 @cli.command()
 @click.argument("symbol")
-@click.option("--capital", required=True, type=float, help="Capital allocation ($)")
+@click.option("--capital", type=float, help="Capital allocation for selling puts ($)")
+@click.option("--shares", type=int, help="Number of shares owned (for selling calls)")
+@click.option("--cost-basis", type=float, help="Cost per share ($) - required with --shares")
 @click.option(
     "--profile",
     default="conservative",
@@ -165,28 +205,67 @@ def cli(ctx: click.Context, db: str, verbose: bool, output_json: bool) -> None:
     help="Risk profile",
 )
 @click.pass_context
-def init(ctx: click.Context, symbol: str, capital: float, profile: str) -> None:
+def init(
+    ctx: click.Context,
+    symbol: str,
+    capital: float,
+    shares: int,
+    cost_basis: float,
+    profile: str,
+) -> None:
     """
     Initialize a new wheel position.
 
-    Starts in CASH state, ready to sell puts.
+    Start with CASH (to sell puts) or SHARES (to sell calls).
 
-    Example: wheel init AAPL --capital 15000 --profile conservative
+    \b
+    Examples:
+      wheel init AAPL --capital 15000           # Start with cash, sell puts
+      wheel init AAPL --shares 200 --cost-basis 150  # Start with shares, sell calls
+      wheel init AAPL --capital 10000 --shares 100 --cost-basis 145  # Both
     """
     manager = _get_manager(ctx)
 
+    # Validate inputs
+    if shares is not None and cost_basis is None:
+        _print_error("--cost-basis is required when --shares is specified")
+        sys.exit(1)
+
+    if shares is None and capital is None:
+        _print_error("Must specify --capital and/or --shares")
+        sys.exit(1)
+
     try:
-        wheel = manager.create_wheel(
-            symbol=symbol.upper(),
-            capital=capital,
-            profile=profile,
-        )
-        _print_success(
-            f"Created wheel for {wheel.symbol} with ${capital:,.2f} capital"
-        )
-        click.echo(f"Profile: {profile}")
-        click.echo(f"State: {wheel.state.value}")
-        click.echo(f"Ready to sell puts (use 'wheel recommend {wheel.symbol}')")
+        if shares is not None and shares > 0:
+            # Start with shares (SHARES state) - can sell calls
+            wheel = manager.import_shares(
+                symbol=symbol.upper(),
+                shares=shares,
+                cost_basis=cost_basis,
+                capital=capital or 0.0,
+                profile=profile,
+            )
+            _print_success(
+                f"Created wheel for {wheel.symbol} with {shares} shares @ ${cost_basis:.2f}"
+            )
+            if capital:
+                click.echo(f"Additional capital: ${capital:,.2f}")
+            click.echo(f"Profile: {profile}")
+            click.echo(f"State: {wheel.state.value}")
+            click.echo(f"Ready to sell calls (use 'wheel recommend {wheel.symbol}')")
+        else:
+            # Start with cash only (CASH state) - can sell puts
+            wheel = manager.create_wheel(
+                symbol=symbol.upper(),
+                capital=capital,
+                profile=profile,
+            )
+            _print_success(
+                f"Created wheel for {wheel.symbol} with ${capital:,.2f} capital"
+            )
+            click.echo(f"Profile: {profile}")
+            click.echo(f"State: {wheel.state.value}")
+            click.echo(f"Ready to sell puts (use 'wheel recommend {wheel.symbol}')")
     except DuplicateSymbolError as e:
         _print_error(str(e))
         sys.exit(1)
