@@ -271,11 +271,9 @@ Token file location: `/workspaces/options_income/.schwab_tokens.json`
 - ✅ Simple path resolution (no context detection required)
 - ⚠️ Must add to `.gitignore` to prevent token exposure
 
-**Configuration**:
-```python
-# Default token file path in config.py
-token_file: str = "/workspaces/options_income/.schwab_tokens.json"
-```
+**Configuration Specification**:
+- Configuration parameter `token_file` defaults to: "/workspaces/options_income/.schwab_tokens.json"
+- Can be overridden via environment variable `SCHWAB_TOKEN_FILE`
 
 **Alternative Considered: Home Directory**
 - Token at `~/.schwab_tokens.json` (different paths in host/container)
@@ -313,17 +311,17 @@ token_file: str = "/workspaces/options_income/.schwab_tokens.json"
 
 **Required `.devcontainer/devcontainer.json` entries**:
 
-```json
-{
-  "mounts": [
-    "source=/etc/letsencrypt,target=/etc/letsencrypt,type=bind,readonly"
-  ]
-}
-```
+Mount specification for SSL certificates:
+- Source path: /etc/letsencrypt
+- Target path: /etc/letsencrypt
+- Type: bind mount
+- Access mode: readonly
 
 **Note**: Workspace mount (`/workspaces/options_income`) is automatic; no additional mount needed for token file.
 
 **`.gitignore` addition**:
+
+Entry to add:
 ```
 # Schwab OAuth tokens (contains sensitive credentials)
 .schwab_tokens.json
@@ -344,760 +342,423 @@ token_file: str = "/workspaces/options_income/.schwab_tokens.json"
 
 ### 3.1 OAuth Configuration (`oauth/config.py`)
 
-```python
-from dataclasses import dataclass, field
-from typing import Optional
-import os
+**Purpose**: Central configuration for all OAuth-related settings and parameters.
 
+**Data Structure: SchwabOAuthConfig**
 
-@dataclass
-class SchwabOAuthConfig:
-    """Configuration for Schwab OAuth 2.0."""
+Configuration data structure containing all OAuth parameters:
 
-    # Required - from Schwab Dev Portal
-    client_id: str
-    client_secret: str
+**Required Fields**:
+- `client_id` (string): OAuth client ID from Schwab Developer Portal
+- `client_secret` (string): OAuth client secret from Schwab Developer Portal
 
-    # Callback configuration
-    callback_host: str = "dirtydata.ai"
-    callback_port: int = 8443
-    callback_path: str = "/oauth/callback"
+**Callback Configuration Fields**:
+- `callback_host` (string): Domain name for OAuth callback (default: "dirtydata.ai")
+- `callback_port` (integer): Port for callback server (default: 8443)
+- `callback_path` (string): URL path for callback endpoint (default: "/oauth/callback")
 
-    # Schwab OAuth endpoints
-    authorization_url: str = "https://api.schwabapi.com/v1/oauth/authorize"
-    token_url: str = "https://api.schwabapi.com/v1/oauth/token"
+**Schwab Endpoint Fields**:
+- `authorization_url` (string): Schwab OAuth authorization endpoint (default: "https://api.schwabapi.com/v1/oauth/authorize")
+- `token_url` (string): Schwab token exchange/refresh endpoint (default: "https://api.schwabapi.com/v1/oauth/token")
 
-    # Token storage (project directory for devcontainer compatibility)
-    token_file: str = "/workspaces/options_income/.schwab_tokens.json"
+**Storage Configuration Fields**:
+- `token_file` (string): Absolute path to token storage file (default: "/workspaces/options_income/.schwab_tokens.json")
 
-    # SSL certificate paths (for callback server on HOST)
-    ssl_cert_path: str = "/etc/letsencrypt/live/dirtydata.ai/fullchain.pem"
-    ssl_key_path: str = "/etc/letsencrypt/live/dirtydata.ai/privkey.pem"
+**SSL Certificate Fields** (for HOST-side callback server):
+- `ssl_cert_path` (string): Path to SSL certificate file (default: "/etc/letsencrypt/live/dirtydata.ai/fullchain.pem")
+- `ssl_key_path` (string): Path to SSL private key file (default: "/etc/letsencrypt/live/dirtydata.ai/privkey.pem")
 
-    # Token refresh settings
-    refresh_buffer_seconds: int = 300  # Refresh 5 min before expiry
-    
-    @property
-    def callback_url(self) -> str:
-        """Full callback URL for OAuth redirect."""
-        return f"https://{self.callback_host}:{self.callback_port}{self.callback_path}"
-    
-    @classmethod
-    def from_env(cls) -> "SchwabOAuthConfig":
-        """Load configuration from environment variables."""
-        client_id = os.environ.get("SCHWAB_CLIENT_ID")
-        client_secret = os.environ.get("SCHWAB_CLIENT_SECRET")
-        
-        if not client_id or not client_secret:
-            raise ValueError(
-                "Missing Schwab OAuth credentials. Set environment variables:\n"
-                "  SCHWAB_CLIENT_ID=your_client_id\n"
-                "  SCHWAB_CLIENT_SECRET=your_client_secret"
-            )
-        
-        return cls(
-            client_id=client_id,
-            client_secret=client_secret,
-            callback_host=os.environ.get("SCHWAB_CALLBACK_HOST", "dirtydata.ai"),
-            callback_port=int(os.environ.get("SCHWAB_CALLBACK_PORT", "8443")),
-            token_file=os.environ.get(
-                "SCHWAB_TOKEN_FILE",
-                "/workspaces/options_income/.schwab_tokens.json"
-            ),
-        )
-```
+**Token Management Fields**:
+- `refresh_buffer_seconds` (integer): Seconds before expiry to trigger refresh (default: 300, i.e., 5 minutes)
+
+**Computed Properties**:
+- `callback_url`: Constructs full callback URL from host, port, and path components
+
+**Methods**:
+
+1. **from_env() → SchwabOAuthConfig**
+   - Loads configuration from environment variables
+   - Required environment variables:
+     - `SCHWAB_CLIENT_ID`: OAuth client ID
+     - `SCHWAB_CLIENT_SECRET`: OAuth client secret
+   - Optional environment variables (with defaults):
+     - `SCHWAB_CALLBACK_HOST`: Override default callback host
+     - `SCHWAB_CALLBACK_PORT`: Override default callback port
+     - `SCHWAB_TOKEN_FILE`: Override default token file location
+   - Raises error if required variables are missing
+   - Returns configured instance with all settings populated
 
 ### 3.2 Token Storage (`oauth/token_storage.py`)
 
-```python
-import json
-import logging
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional
+**Purpose**: Manages persistent storage and retrieval of OAuth tokens using JSON file storage.
 
-logger = logging.getLogger(__name__)
+**Data Structure: TokenData**
 
+Represents OAuth token information with expiry tracking:
 
-@dataclass
-class TokenData:
-    """Stored OAuth token data."""
-    
-    access_token: str
-    refresh_token: str
-    token_type: str  # "Bearer"
-    expires_in: int  # seconds from issue
-    scope: str
-    issued_at: str  # ISO timestamp
-    
-    @property
-    def expires_at(self) -> datetime:
-        """Calculate expiration datetime."""
-        issued = datetime.fromisoformat(self.issued_at)
-        return issued + timedelta(seconds=self.expires_in)
-    
-    @property
-    def is_expired(self) -> bool:
-        """Check if access token is expired."""
-        return datetime.now(timezone.utc) >= self.expires_at
-    
-    def expires_within(self, seconds: int) -> bool:
-        """Check if token expires within given seconds."""
-        buffer_time = datetime.now(timezone.utc) + timedelta(seconds=seconds)
-        return buffer_time >= self.expires_at
-    
-    def to_dict(self) -> dict:
-        """Convert to dictionary for JSON serialization."""
-        return asdict(self)
-    
-    @classmethod
-    def from_dict(cls, data: dict) -> "TokenData":
-        """Create from dictionary."""
-        return cls(**data)
+**Fields**:
+- `access_token` (string): OAuth access token for API authentication
+- `refresh_token` (string): OAuth refresh token for obtaining new access tokens
+- `token_type` (string): Token type identifier (always "Bearer")
+- `expires_in` (integer): Token lifetime in seconds from issue time
+- `scope` (string): OAuth scope granted by authorization
+- `issued_at` (string): ISO 8601 timestamp when token was issued
 
+**Computed Properties**:
+- `expires_at`: Calculates absolute expiration datetime by adding `expires_in` to `issued_at`
+- `is_expired`: Boolean indicating if token is currently expired (compares current time to `expires_at`)
 
-class TokenStorage:
-    """File-based token storage (plaintext JSON)."""
-    
-    def __init__(self, token_file: str):
-        """
-        Initialize token storage.
-        
-        Args:
-            token_file: Path to token storage file
-        """
-        self.token_file = Path(token_file).expanduser()
-        self._ensure_directory()
-    
-    def _ensure_directory(self) -> None:
-        """Create parent directory if needed."""
-        self.token_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    def save(self, token_data: TokenData) -> None:
-        """
-        Save tokens to file.
-        
-        Args:
-            token_data: Token data to save
-        """
-        try:
-            with open(self.token_file, "w") as f:
-                json.dump(token_data.to_dict(), f, indent=2)
-            logger.info(f"Tokens saved to {self.token_file}")
-        except IOError as e:
-            logger.error(f"Failed to save tokens: {e}")
-            raise TokenStorageError(f"Failed to save tokens: {e}") from e
-    
-    def load(self) -> Optional[TokenData]:
-        """
-        Load tokens from file.
-        
-        Returns:
-            TokenData if file exists and valid, None otherwise
-        """
-        if not self.token_file.exists():
-            logger.debug("No token file found")
-            return None
-        
-        try:
-            with open(self.token_file, "r") as f:
-                data = json.load(f)
-            return TokenData.from_dict(data)
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
-            logger.warning(f"Invalid token file, will need re-authorization: {e}")
-            return None
-    
-    def delete(self) -> bool:
-        """
-        Delete token file.
-        
-        Returns:
-            True if deleted, False if didn't exist
-        """
-        if self.token_file.exists():
-            self.token_file.unlink()
-            logger.info("Token file deleted")
-            return True
-        return False
-    
-    def exists(self) -> bool:
-        """Check if token file exists."""
-        return self.token_file.exists()
+**Methods**:
 
+1. **expires_within(seconds) → boolean**
+   - Checks if token will expire within the specified number of seconds
+   - Used to trigger proactive refresh before actual expiration
+   - Returns true if expiration time is less than `seconds` away
 
-class TokenStorageError(Exception):
-    """Token storage operation failed."""
-    pass
-```
+2. **to_dict() → dictionary**
+   - Converts token data to dictionary format for JSON serialization
+   - Returns all fields as key-value pairs
+
+3. **from_dict(data) → TokenData**
+   - Creates TokenData instance from dictionary
+   - Used when deserializing from JSON file
+   - Validates required fields are present
+
+**Class: TokenStorage**
+
+Handles file-based persistence of token data:
+
+**Initialization Parameters**:
+- `token_file` (string): Absolute path to JSON file for token storage
+
+**Internal State**:
+- Expands tilde (~) in paths to user home directory
+- Creates parent directories if they don't exist
+- Stores Path object for file operations
+
+**Methods**:
+
+1. **save(token_data) → None**
+   - Serializes TokenData to JSON format (indented for readability)
+   - Writes to configured token file location
+   - Logs successful save operations
+   - Raises `TokenStorageError` on I/O failures (disk full, permissions, etc.)
+
+2. **load() → TokenData or None**
+   - Reads and deserializes token data from file
+   - Returns None if file doesn't exist (first-time use)
+   - Returns None if file is corrupted/invalid (logs warning)
+   - Returns TokenData instance if successful
+   - Handles JSON parse errors gracefully
+
+3. **delete() → boolean**
+   - Removes token file from filesystem
+   - Returns True if file was deleted
+   - Returns False if file didn't exist
+   - Logs deletion operations
+
+4. **exists() → boolean**
+   - Checks if token file exists on filesystem
+   - Used to determine if initial authorization is needed
+
+**Exception: TokenStorageError**
+
+Raised when file operations fail:
+- Disk I/O errors
+- Permission denied
+- Filesystem full
+- Path not accessible
 
 ### 3.3 Token Manager (`oauth/token_manager.py`)
 
-```python
-import logging
-import requests
-from base64 import b64encode
-from datetime import datetime, timezone
-from typing import Optional
+**Purpose**: Manages the complete token lifecycle including exchange, refresh, validation, and caching.
 
-from .config import SchwabOAuthConfig
-from .token_storage import TokenStorage, TokenData
+**Class: TokenManager**
 
-logger = logging.getLogger(__name__)
+Orchestrates all token operations and maintains token state:
 
+**Initialization Parameters**:
+- `config` (SchwabOAuthConfig): OAuth configuration object
+- `storage` (TokenStorage, optional): Token storage instance (creates default if not provided)
 
-class TokenManager:
-    """Manages OAuth token lifecycle."""
-    
-    def __init__(self, config: SchwabOAuthConfig, storage: Optional[TokenStorage] = None):
-        """
-        Initialize token manager.
-        
-        Args:
-            config: OAuth configuration
-            storage: Token storage (creates default if not provided)
-        """
-        self.config = config
-        self.storage = storage or TokenStorage(config.token_file)
-        self._cached_token: Optional[TokenData] = None
-    
-    def exchange_code_for_tokens(self, authorization_code: str) -> TokenData:
-        """
-        Exchange authorization code for access and refresh tokens.
-        
-        Args:
-            authorization_code: Code received from OAuth callback
-            
-        Returns:
-            TokenData with access and refresh tokens
-        """
-        logger.info("Exchanging authorization code for tokens")
-        
-        # Prepare Basic auth header
-        credentials = f"{self.config.client_id}:{self.config.client_secret}"
-        auth_header = b64encode(credentials.encode()).decode()
-        
-        response = requests.post(
-            self.config.token_url,
-            headers={
-                "Authorization": f"Basic {auth_header}",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-            data={
-                "grant_type": "authorization_code",
-                "code": authorization_code,
-                "redirect_uri": self.config.callback_url,
-            },
-            timeout=30,
-        )
-        
-        if response.status_code != 200:
-            logger.error(f"Token exchange failed: {response.status_code} - {response.text}")
-            raise TokenExchangeError(f"Token exchange failed: {response.text}")
-        
-        data = response.json()
-        
-        token_data = TokenData(
-            access_token=data["access_token"],
-            refresh_token=data["refresh_token"],
-            token_type=data.get("token_type", "Bearer"),
-            expires_in=data["expires_in"],
-            scope=data.get("scope", ""),
-            issued_at=datetime.now(timezone.utc).isoformat(),
-        )
-        
-        # Save tokens
-        self.storage.save(token_data)
-        self._cached_token = token_data
-        
-        logger.info("Successfully obtained and saved tokens")
-        return token_data
-    
-    def refresh_tokens(self) -> TokenData:
-        """
-        Refresh access token using refresh token.
-        
-        Returns:
-            New TokenData with fresh access token
-        """
-        current_token = self._get_current_token()
-        if not current_token:
-            raise TokenRefreshError("No refresh token available")
-        
-        logger.info("Refreshing access token")
-        
-        credentials = f"{self.config.client_id}:{self.config.client_secret}"
-        auth_header = b64encode(credentials.encode()).decode()
-        
-        response = requests.post(
-            self.config.token_url,
-            headers={
-                "Authorization": f"Basic {auth_header}",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": current_token.refresh_token,
-            },
-            timeout=30,
-        )
-        
-        if response.status_code != 200:
-            logger.error(f"Token refresh failed: {response.status_code} - {response.text}")
-            raise TokenRefreshError(f"Token refresh failed: {response.text}")
-        
-        data = response.json()
-        
-        token_data = TokenData(
-            access_token=data["access_token"],
-            refresh_token=data.get("refresh_token", current_token.refresh_token),
-            token_type=data.get("token_type", "Bearer"),
-            expires_in=data["expires_in"],
-            scope=data.get("scope", current_token.scope),
-            issued_at=datetime.now(timezone.utc).isoformat(),
-        )
-        
-        self.storage.save(token_data)
-        self._cached_token = token_data
-        
-        logger.info("Successfully refreshed tokens")
-        return token_data
-    
-    def get_valid_access_token(self) -> str:
-        """
-        Get a valid access token, refreshing if necessary.
-        
-        Returns:
-            Valid access token string
-            
-        Raises:
-            TokenNotAvailableError: If no valid token and can't refresh
-        """
-        token = self._get_current_token()
-        
-        if not token:
-            raise TokenNotAvailableError(
-                "No tokens available. Run authorization flow first."
-            )
-        
-        # Check if refresh needed
-        if token.expires_within(self.config.refresh_buffer_seconds):
-            logger.info("Token expiring soon, refreshing...")
-            token = self.refresh_tokens()
-        
-        return token.access_token
-    
-    def is_authorized(self) -> bool:
-        """Check if we have valid (or refreshable) tokens."""
-        token = self._get_current_token()
-        return token is not None
-    
-    def get_token_status(self) -> dict:
-        """Get current token status for diagnostics."""
-        token = self._get_current_token()
-        
-        if not token:
-            return {
-                "authorized": False,
-                "message": "No tokens stored"
-            }
-        
-        return {
-            "authorized": True,
-            "expired": token.is_expired,
-            "expires_at": token.expires_at.isoformat(),
-            "expires_in_seconds": (token.expires_at - datetime.now(timezone.utc)).total_seconds(),
-            "scope": token.scope,
-        }
-    
-    def revoke(self) -> None:
-        """Delete stored tokens (local revocation)."""
-        self.storage.delete()
-        self._cached_token = None
-        logger.info("Tokens revoked (local)")
-    
-    def _get_current_token(self) -> Optional[TokenData]:
-        """Get current token from cache or storage."""
-        if self._cached_token:
-            return self._cached_token
-        
-        self._cached_token = self.storage.load()
-        return self._cached_token
+**Internal State**:
+- Token cache for performance optimization
+- Configuration reference
+- Storage reference
 
+**Methods**:
 
-class TokenExchangeError(Exception):
-    """Failed to exchange authorization code for tokens."""
-    pass
+1. **exchange_code_for_tokens(authorization_code) → TokenData**
+   - Exchanges authorization code for initial access and refresh tokens
+   - Makes POST request to Schwab token endpoint
+   - Authentication: HTTP Basic Auth using base64-encoded `client_id:client_secret`
+   - Request parameters:
+     - `grant_type`: "authorization_code"
+     - `code`: The authorization code received
+     - `redirect_uri`: Must match registered callback URL
+   - Response handling:
+     - Success (200): Parse JSON response, extract tokens
+     - Failure: Log error, raise `TokenExchangeError`
+   - Stores received tokens using TokenStorage
+   - Updates internal cache
+   - Returns TokenData with all token information
 
+2. **refresh_tokens() → TokenData**
+   - Refreshes expired or near-expiry access token using refresh token
+   - Loads current token from storage
+   - Makes POST request to Schwab token endpoint
+   - Authentication: HTTP Basic Auth (same as exchange)
+   - Request parameters:
+     - `grant_type`: "refresh_token"
+     - `refresh_token`: Current refresh token
+   - Response handling:
+     - Success: Extract new access token
+     - May include new refresh token (if not, reuse existing)
+     - Failure: Raise `TokenRefreshError`
+   - Stores updated tokens
+   - Returns new TokenData
 
-class TokenRefreshError(Exception):
-    """Failed to refresh tokens."""
-    pass
+3. **get_valid_access_token() → string**
+   - Returns a currently valid access token for API use
+   - Workflow:
+     1. Load current token from cache or storage
+     2. If no token exists, raise `TokenNotAvailableError`
+     3. Check if token expires within buffer period (default: 5 minutes)
+     4. If expiring soon, automatically refresh
+     5. Return valid access token string
+   - Ensures caller always gets usable token
+   - Transparent automatic refresh
 
+4. **is_authorized() → boolean**
+   - Checks if valid tokens exist
+   - Returns True if token file exists and is loadable
+   - Does not validate expiration
+   - Used for quick authorization status check
 
-class TokenNotAvailableError(Exception):
-    """No valid tokens available."""
-    pass
-```
+5. **get_token_status() → dictionary**
+   - Returns diagnostic information about current token state
+   - If unauthorized:
+     - `authorized`: False
+     - `message`: Explanation
+   - If authorized:
+     - `authorized`: True
+     - `expired`: Boolean expiration status
+     - `expires_at`: ISO timestamp of expiration
+     - `expires_in_seconds`: Time remaining until expiration
+     - `scope`: OAuth scope granted
+   - Used for debugging and status displays
+
+6. **revoke() → None**
+   - Deletes stored tokens (local revocation only)
+   - Clears internal cache
+   - Does not notify Schwab (local operation)
+   - Forces re-authorization on next use
+
+**Private Methods**:
+
+- **_get_current_token() → TokenData or None**
+  - Returns token from cache if available
+  - Otherwise loads from storage and caches
+  - Returns None if no tokens exist
+
+**Exceptions**:
+
+- **TokenExchangeError**: Authorization code exchange failed
+- **TokenRefreshError**: Token refresh request failed
+- **TokenNotAvailableError**: No tokens available for use
 
 ### 3.4 Auth Server (`oauth/auth_server.py`)
 
-```python
-import logging
-import ssl
-import threading
-import webbrowser
-from dataclasses import dataclass
-from typing import Callable, Optional
-from urllib.parse import urlencode
+**Purpose**: Provides temporary HTTPS server to receive OAuth callback and capture authorization code.
 
-from flask import Flask, request, Response
-from werkzeug.serving import make_server
+**Data Structure: AuthorizationResult**
 
-from .config import SchwabOAuthConfig
+Represents the outcome of an authorization flow:
 
-logger = logging.getLogger(__name__)
+**Fields**:
+- `success` (boolean): Whether authorization succeeded
+- `authorization_code` (string, optional): Code received from Schwab (on success)
+- `error` (string, optional): Error code (on failure)
+- `error_description` (string, optional): Human-readable error description (on failure)
 
+**Class: OAuthCallbackServer**
 
-@dataclass
-class AuthorizationResult:
-    """Result of OAuth authorization flow."""
-    success: bool
-    authorization_code: Optional[str] = None
-    error: Optional[str] = None
-    error_description: Optional[str] = None
+Temporary HTTPS server for OAuth callback handling:
 
+**Initialization Parameters**:
+- `config` (SchwabOAuthConfig): OAuth configuration with callback settings
 
-class OAuthCallbackServer:
-    """
-    Local HTTPS server to handle OAuth callback.
-    
-    This server runs temporarily during the OAuth flow to receive
-    the authorization code from Schwab's redirect.
-    """
-    
-    def __init__(self, config: SchwabOAuthConfig):
-        """
-        Initialize callback server.
-        
-        Args:
-            config: OAuth configuration
-        """
-        self.config = config
-        self.app = Flask(__name__)
-        self.server: Optional[make_server] = None
-        self.result: Optional[AuthorizationResult] = None
-        self._shutdown_event = threading.Event()
-        
-        # Register callback route
-        self.app.add_url_rule(
-            self.config.callback_path,
-            "oauth_callback",
-            self._handle_callback,
-            methods=["GET"]
-        )
-        
-        # Status endpoint for debugging
-        self.app.add_url_rule(
-            "/oauth/status",
-            "oauth_status",
-            self._handle_status,
-            methods=["GET"]
-        )
-    
-    def _handle_callback(self) -> Response:
-        """Handle OAuth callback from Schwab."""
-        logger.info("Received OAuth callback")
-        
-        # Check for error response
-        error = request.args.get("error")
-        if error:
-            error_desc = request.args.get("error_description", "Unknown error")
-            logger.error(f"OAuth error: {error} - {error_desc}")
-            self.result = AuthorizationResult(
-                success=False,
-                error=error,
-                error_description=error_desc
-            )
-            self._shutdown_event.set()
-            return Response(
-                f"<html><body><h1>Authorization Failed</h1>"
-                f"<p>Error: {error}</p><p>{error_desc}</p>"
-                f"<p>You can close this window.</p></body></html>",
-                status=400,
-                content_type="text/html"
-            )
-        
-        # Get authorization code
-        code = request.args.get("code")
-        if not code:
-            logger.error("No authorization code in callback")
-            self.result = AuthorizationResult(
-                success=False,
-                error="missing_code",
-                error_description="No authorization code received"
-            )
-            self._shutdown_event.set()
-            return Response(
-                "<html><body><h1>Authorization Failed</h1>"
-                "<p>No authorization code received.</p>"
-                "<p>You can close this window.</p></body></html>",
-                status=400,
-                content_type="text/html"
-            )
-        
-        logger.info("Authorization code received successfully")
-        self.result = AuthorizationResult(
-            success=True,
-            authorization_code=code
-        )
-        self._shutdown_event.set()
-        
-        return Response(
-            "<html><body><h1>Authorization Successful!</h1>"
-            "<p>You can close this window and return to the application.</p>"
-            "</body></html>",
-            status=200,
-            content_type="text/html"
-        )
-    
-    def _handle_status(self) -> Response:
-        """Status endpoint for debugging."""
-        return Response(
-            '{"status": "running", "waiting_for": "oauth_callback"}',
-            status=200,
-            content_type="application/json"
-        )
-    
-    def generate_authorization_url(self) -> str:
-        """Generate the Schwab authorization URL."""
-        params = {
-            "client_id": self.config.client_id,
-            "redirect_uri": self.config.callback_url,
-            "response_type": "code",
-        }
-        return f"{self.config.authorization_url}?{urlencode(params)}"
-    
-    def start(self) -> None:
-        """Start the callback server."""
-        # Create SSL context
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ssl_context.load_cert_chain(
-            self.config.ssl_cert_path,
-            self.config.ssl_key_path
-        )
-        
-        self.server = make_server(
-            "0.0.0.0",  # Listen on all interfaces
-            self.config.callback_port,
-            self.app,
-            ssl_context=ssl_context
-        )
-        
-        logger.info(f"Starting OAuth callback server on port {self.config.callback_port}")
-        
-        # Run in background thread
-        thread = threading.Thread(target=self.server.serve_forever)
-        thread.daemon = True
-        thread.start()
-    
-    def wait_for_callback(self, timeout: int = 300) -> AuthorizationResult:
-        """
-        Wait for OAuth callback.
-        
-        Args:
-            timeout: Maximum seconds to wait
-            
-        Returns:
-            AuthorizationResult
-        """
-        logger.info(f"Waiting for OAuth callback (timeout: {timeout}s)")
-        
-        if self._shutdown_event.wait(timeout=timeout):
-            return self.result or AuthorizationResult(
-                success=False,
-                error="unknown",
-                error_description="Server shutdown without result"
-            )
-        else:
-            return AuthorizationResult(
-                success=False,
-                error="timeout",
-                error_description=f"No callback received within {timeout} seconds"
-            )
-    
-    def stop(self) -> None:
-        """Stop the callback server."""
-        if self.server:
-            logger.info("Stopping OAuth callback server")
-            self.server.shutdown()
-            self.server = None
+**Internal State**:
+- Flask application instance
+- HTTP server instance
+- Authorization result storage
+- Shutdown event for synchronization
 
+**Server Endpoints**:
 
-def run_authorization_flow(
-    config: SchwabOAuthConfig,
-    open_browser: bool = True,
-    timeout: int = 300
-) -> AuthorizationResult:
-    """
-    Run the complete OAuth authorization flow.
-    
-    Args:
-        config: OAuth configuration
-        open_browser: Whether to automatically open browser
-        timeout: Seconds to wait for callback
-        
-    Returns:
-        AuthorizationResult with authorization code or error
-    """
-    server = OAuthCallbackServer(config)
-    
-    try:
-        # Start callback server
-        server.start()
-        
-        # Generate and display authorization URL
-        auth_url = server.generate_authorization_url()
-        
-        print("\n" + "=" * 60)
-        print("SCHWAB OAUTH AUTHORIZATION")
-        print("=" * 60)
-        print("\nPlease authorize the application by visiting:")
-        print(f"\n  {auth_url}\n")
-        
-        if open_browser:
-            print("Opening browser automatically...")
-            webbrowser.open(auth_url)
-        else:
-            print("Copy the URL above and paste it in your browser.")
-        
-        print("\nWaiting for authorization...")
-        print("=" * 60 + "\n")
-        
-        # Wait for callback
-        result = server.wait_for_callback(timeout)
-        
-        return result
-        
-    finally:
-        server.stop()
-```
+1. **GET /oauth/callback** (main callback endpoint)
+   - Receives OAuth redirect from Schwab
+   - Query parameters:
+     - `code`: Authorization code (on success)
+     - `error`: Error code (on failure)
+     - `error_description`: Error details (on failure)
+   - Response handling:
+     - If error present: Set failure result, return HTML error page (400 status)
+     - If code missing: Set missing code error, return HTML error page (400 status)
+     - If code present: Set success result, return HTML success page (200 status)
+   - All cases: Signal shutdown event to unblock waiting thread
+   - Returns user-friendly HTML page indicating result
+
+2. **GET /oauth/status** (diagnostic endpoint)
+   - Returns JSON status indicating server is running
+   - Used for debugging and health checks
+   - Always returns 200 status
+
+**Methods**:
+
+1. **generate_authorization_url() → string**
+   - Constructs Schwab authorization URL with proper parameters
+   - Parameters included:
+     - `client_id`: From configuration
+     - `redirect_uri`: Full callback URL
+     - `response_type`: Always "code" (authorization code flow)
+   - Returns complete URL ready for browser
+
+2. **start() → None**
+   - Initializes HTTPS server with SSL certificates
+   - SSL Configuration:
+     - Loads certificate and private key from paths in config
+     - Uses TLS server protocol
+   - Network binding:
+     - Listens on all interfaces (0.0.0.0)
+     - Uses configured callback port
+   - Execution:
+     - Runs server in background daemon thread
+     - Non-blocking operation
+
+3. **wait_for_callback(timeout) → AuthorizationResult**
+   - Blocks until callback received or timeout expires
+   - Default timeout: 300 seconds (5 minutes)
+   - Returns:
+     - Success result with authorization code (if callback received)
+     - Timeout error (if no callback within timeout period)
+     - Unknown error (if server shutdown unexpectedly)
+
+4. **stop() → None**
+   - Gracefully shuts down HTTPS server
+   - Cleans up server resources
+   - Safe to call multiple times
+
+**Function: run_authorization_flow**
+
+High-level function orchestrating complete authorization flow:
+
+**Parameters**:
+- `config` (SchwabOAuthConfig): OAuth configuration
+- `open_browser` (boolean, default True): Whether to auto-open browser
+- `timeout` (integer, default 300): Seconds to wait for callback
+
+**Workflow**:
+1. Create and start callback server
+2. Generate authorization URL
+3. Display formatted instructions to user
+4. Optionally open URL in default browser
+5. Wait for callback with timeout
+6. Return result (success or error)
+7. Ensure server cleanup (in finally block)
+
+**Console Output**:
+- Banner with "SCHWAB OAUTH AUTHORIZATION"
+- Full authorization URL for manual copying
+- Browser opening notification (if applicable)
+- Wait status indicator
+- Formatted for clear user guidance
 
 ### 3.5 OAuth Coordinator (`oauth/coordinator.py`)
 
-```python
-import logging
-from typing import Optional
+**Purpose**: High-level facade providing simple interface for OAuth operations. This is the primary integration point for the rest of the application.
 
-from .config import SchwabOAuthConfig
-from .auth_server import run_authorization_flow, AuthorizationResult
-from .token_manager import TokenManager, TokenNotAvailableError
-from .token_storage import TokenStorage
+**Class: OAuthCoordinator**
 
-logger = logging.getLogger(__name__)
+Coordinates all OAuth components to provide simple, unified interface:
 
+**Initialization Parameters**:
+- `config` (SchwabOAuthConfig, optional): OAuth configuration (loads from environment if not provided)
 
-class OAuthCoordinator:
-    """
-    High-level coordinator for OAuth operations.
-    
-    This is the main interface for the rest of the application.
-    """
-    
-    def __init__(self, config: Optional[SchwabOAuthConfig] = None):
-        """
-        Initialize OAuth coordinator.
-        
-        Args:
-            config: OAuth configuration (loads from env if not provided)
-        """
-        self.config = config or SchwabOAuthConfig.from_env()
-        self.storage = TokenStorage(self.config.token_file)
-        self.token_manager = TokenManager(self.config, self.storage)
-    
-    def ensure_authorized(self, auto_open_browser: bool = True) -> bool:
-        """
-        Ensure we have valid authorization, running flow if needed.
-        
-        Args:
-            auto_open_browser: Whether to auto-open browser for auth
-            
-        Returns:
-            True if authorized, False if authorization failed
-        """
-        # Check if already authorized
-        if self.token_manager.is_authorized():
-            logger.info("Already authorized")
-            return True
-        
-        # Need to run authorization flow
-        logger.info("No valid tokens, starting authorization flow")
-        return self.run_authorization_flow(auto_open_browser)
-    
-    def run_authorization_flow(self, open_browser: bool = True) -> bool:
-        """
-        Run the OAuth authorization flow.
-        
-        Args:
-            open_browser: Whether to automatically open browser
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        result = run_authorization_flow(
-            self.config,
-            open_browser=open_browser,
-            timeout=300
-        )
-        
-        if not result.success:
-            logger.error(f"Authorization failed: {result.error} - {result.error_description}")
-            return False
-        
-        # Exchange code for tokens
-        try:
-            self.token_manager.exchange_code_for_tokens(result.authorization_code)
-            logger.info("Authorization successful!")
-            return True
-        except Exception as e:
-            logger.error(f"Token exchange failed: {e}")
-            return False
-    
-    def get_access_token(self) -> str:
-        """
-        Get a valid access token for API calls.
-        
-        Returns:
-            Valid access token string
-            
-        Raises:
-            TokenNotAvailableError: If not authorized
-        """
-        return self.token_manager.get_valid_access_token()
-    
-    def get_authorization_header(self) -> dict:
-        """
-        Get Authorization header for API requests.
-        
-        Returns:
-            Dict with Authorization header
-        """
-        token = self.get_access_token()
-        return {"Authorization": f"Bearer {token}"}
-    
-    def is_authorized(self) -> bool:
-        """Check if currently authorized."""
-        return self.token_manager.is_authorized()
-    
-    def get_status(self) -> dict:
-        """Get current authorization status."""
-        return self.token_manager.get_token_status()
-    
-    def revoke(self) -> None:
-        """Revoke current authorization."""
-        self.token_manager.revoke()
-        logger.info("Authorization revoked")
-```
+**Internal Components**:
+- Configuration manager
+- Token storage instance
+- Token manager instance
+- Automatic component wiring
+
+**Public Methods**:
+
+1. **ensure_authorized(auto_open_browser=True) → boolean**
+   - Ensures application has valid authorization
+   - Workflow:
+     1. Check if already authorized (tokens exist)
+     2. If authorized, return True immediately
+     3. If not authorized, automatically trigger authorization flow
+     4. Return success/failure status
+   - Parameters:
+     - `auto_open_browser`: Whether to automatically open browser for user
+   - Use case: Call once at application startup to ensure API access
+   - Non-blocking: Returns quickly if already authorized
+   - User-friendly: Handles missing authorization transparently
+
+2. **run_authorization_flow(open_browser=True) → boolean**
+   - Explicitly runs the complete OAuth authorization flow
+   - Workflow:
+     1. Start callback server and generate authorization URL
+     2. Display URL to user (optionally open browser)
+     3. Wait for user to authorize in browser
+     4. Receive authorization code via callback
+     5. Exchange code for access and refresh tokens
+     6. Save tokens to storage
+   - Parameters:
+     - `open_browser`: Whether to auto-open browser
+   - Returns:
+     - True if authorization succeeded
+     - False if user denied, timeout, or exchange failed
+   - Logs all errors for troubleshooting
+
+3. **get_access_token() → string**
+   - Returns valid access token for immediate API use
+   - Automatically refreshes if token is expired or near expiration
+   - Raises `TokenNotAvailableError` if no authorization exists
+   - Transparent token refresh (caller doesn't need to handle expiry)
+   - Primary method for obtaining tokens for API calls
+
+4. **get_authorization_header() → dictionary**
+   - Returns ready-to-use HTTP Authorization header
+   - Format: `{"Authorization": "Bearer <token>"}`
+   - Includes automatic token refresh
+   - Convenience method for HTTP requests
+   - Use case: Directly inject into requests headers
+
+5. **is_authorized() → boolean**
+   - Quick check for authorization status
+   - Returns True if tokens exist (regardless of expiration)
+   - Does not trigger authorization flow
+   - Lightweight status check
+
+6. **get_status() → dictionary**
+   - Returns detailed authorization status information
+   - Delegates to token manager's get_token_status()
+   - Returns diagnostic data for debugging and display
+   - Use case: Status dashboards, troubleshooting
+
+7. **revoke() → None**
+   - Revokes current authorization (deletes local tokens)
+   - Forces re-authorization on next API call
+   - Local operation only (does not notify Schwab)
+   - Use case: Logout, token rotation, security cleanup
+
+**Design Pattern**:
+- Facade pattern: Simplifies complex OAuth subsystem
+- Dependency injection: Accepts optional configuration
+- Automatic wiring: Creates default components if not provided
+- Error propagation: Bubbles up specific exceptions for caller handling
 
 ---
 
@@ -1105,57 +766,59 @@ class OAuthCoordinator:
 
 ### 4.1 Schwab Client Usage Pattern
 
-```python
-# Example usage in schwab/client.py
+**Purpose**: Demonstrates how Schwab API client integrates with OAuth module.
 
-from src.oauth.coordinator import OAuthCoordinator
+**Class: SchwabClient** (implementation in `schwab/client.py`)
 
+HTTP client for Schwab Trading and Market Data APIs with OAuth authentication:
 
-class SchwabClient:
-    """Client for Schwab Trading and Market Data APIs."""
-    
-    def __init__(self, oauth: Optional[OAuthCoordinator] = None):
-        self.oauth = oauth or OAuthCoordinator()
-        self.base_url = "https://api.schwabapi.com"
-        self.session = requests.Session()
-    
-    def _request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
-        """Make authenticated request to Schwab API."""
-        # Get fresh auth header (auto-refreshes if needed)
-        headers = self.oauth.get_authorization_header()
-        headers.update(kwargs.pop("headers", {}))
-        
-        url = f"{self.base_url}{endpoint}"
-        
-        response = self.session.request(
-            method,
-            url,
-            headers=headers,
-            **kwargs
-        )
-        
-        # Handle 401 - token may have been revoked
-        if response.status_code == 401:
-            raise SchwabAuthenticationError("Authentication failed - re-authorize required")
-        
-        return response
-    
-    def get_accounts(self) -> dict:
-        """Get linked accounts."""
-        response = self._request("GET", "/v1/accounts")
-        response.raise_for_status()
-        return response.json()
-    
-    def get_option_chain(self, symbol: str) -> dict:
-        """Get options chain for symbol."""
-        response = self._request(
-            "GET",
-            "/v1/marketdata/chains",
-            params={"symbol": symbol}
-        )
-        response.raise_for_status()
-        return response.json()
-```
+**Initialization**:
+- Parameters:
+  - `oauth` (OAuthCoordinator, optional): OAuth coordinator instance (creates default if not provided)
+- Internal state:
+  - OAuth coordinator reference
+  - Base URL for Schwab API: "https://api.schwabapi.com"
+  - Requests session for connection pooling
+
+**Private Methods**:
+
+**_request(method, endpoint, **kwargs) → Response**
+- Makes authenticated HTTP request to Schwab API
+- Authentication workflow:
+  1. Obtain authorization header from OAuth coordinator
+  2. Merge with any additional headers from kwargs
+  3. Construct full URL from base URL and endpoint
+  4. Execute HTTP request with all parameters
+  5. Check response status
+  6. Handle 401 Unauthorized: Raise `SchwabAuthenticationError` indicating re-authorization needed
+- Parameters:
+  - `method`: HTTP method (GET, POST, etc.)
+  - `endpoint`: API endpoint path (e.g., "/v1/accounts")
+  - `kwargs`: Additional request parameters (query params, body, etc.)
+- Returns: HTTP Response object
+- Automatic token refresh: OAuth coordinator handles expiry transparently
+
+**Public API Methods** (examples):
+
+**get_accounts() → dictionary**
+- Retrieves all linked brokerage accounts
+- HTTP: GET /v1/accounts
+- Returns: JSON response with account details
+- Error handling: Raises HTTP errors if request fails
+
+**get_option_chain(symbol) → dictionary**
+- Retrieves options chain for specified symbol
+- HTTP: GET /v1/marketdata/chains
+- Parameters:
+  - `symbol`: Stock ticker symbol
+- Returns: JSON response with options chain data
+- Error handling: Raises HTTP errors if request fails
+
+**Integration Points**:
+- OAuth coordinator provides authentication
+- Client handles API-specific logic
+- Separation of concerns: authentication vs. API operations
+- Reusable pattern for all Schwab API endpoints
 
 ---
 
@@ -1163,41 +826,65 @@ class SchwabClient:
 
 ### 5.1 Error Hierarchy
 
-```python
-class SchwabOAuthError(Exception):
-    """Base exception for Schwab OAuth errors."""
-    pass
+**Purpose**: Provides specific exception types for different OAuth failure scenarios.
 
+**Exception Classes**:
 
-class ConfigurationError(SchwabOAuthError):
-    """OAuth configuration error."""
-    pass
+**SchwabOAuthError**
+- Base exception for all Schwab OAuth-related errors
+- Inherits from Python's Exception
+- Allows catching all OAuth errors with single handler
+- Use case: Top-level error handling in application
 
+**ConfigurationError** (inherits from SchwabOAuthError)
+- Raised when OAuth configuration is invalid or incomplete
+- Scenarios:
+  - Missing required environment variables (SCHWAB_CLIENT_ID, SCHWAB_CLIENT_SECRET)
+  - Invalid configuration values
+  - Inaccessible SSL certificate paths
+- Use case: Application startup validation
 
-class AuthorizationError(SchwabOAuthError):
-    """OAuth authorization flow error."""
-    pass
+**AuthorizationError** (inherits from SchwabOAuthError)
+- Raised during OAuth authorization flow failures
+- Scenarios:
+  - User denies authorization
+  - Invalid callback parameters
+  - Authorization server errors
+- Use case: User-facing authorization process
 
+**TokenExchangeError** (inherits from SchwabOAuthError)
+- Raised when authorization code cannot be exchanged for tokens
+- Scenarios:
+  - Invalid authorization code
+  - Code already used or expired
+  - Client credentials rejected
+  - Network failures during exchange
+- Use case: Initial authorization completion
 
-class TokenExchangeError(SchwabOAuthError):
-    """Failed to exchange authorization code."""
-    pass
+**TokenRefreshError** (inherits from SchwabOAuthError)
+- Raised when token refresh fails
+- Scenarios:
+  - Refresh token expired or revoked
+  - Network failures during refresh
+  - Client credentials changed
+- Use case: Automatic token refresh operations
 
+**TokenNotAvailableError** (inherits from SchwabOAuthError)
+- Raised when attempting API call without valid tokens
+- Scenarios:
+  - No tokens stored (never authorized)
+  - Tokens deleted or corrupted
+  - Cannot refresh expired tokens
+- Use case: Pre-flight authorization check
 
-class TokenRefreshError(SchwabOAuthError):
-    """Failed to refresh tokens."""
-    pass
-
-
-class TokenNotAvailableError(SchwabOAuthError):
-    """No valid tokens available."""
-    pass
-
-
-class TokenStorageError(SchwabOAuthError):
-    """Token storage operation failed."""
-    pass
-```
+**TokenStorageError** (inherits from SchwabOAuthError)
+- Raised when token file operations fail
+- Scenarios:
+  - Disk I/O errors
+  - Permission denied
+  - Filesystem full
+  - Invalid JSON in token file
+- Use case: File system operation failures
 
 ### 5.2 Error Recovery Strategy
 
@@ -1277,43 +964,63 @@ For multi-user or more secure deployments:
 
 **Important**: Authorization must run on the HOST, not in the devcontainer.
 
-```bash
-# 1. Install dependencies ON HOST
-pip install flask requests
+**Setup Steps**:
 
-# 2. Set environment variables ON HOST
-export SCHWAB_CLIENT_ID="your_client_id"
-export SCHWAB_CLIENT_SECRET="your_client_secret"
+1. **Install Python dependencies on HOST**:
+   - Required packages: flask, requests
+   - Installation method: pip install
 
-# 3. Navigate to project directory ON HOST
-cd /workspaces/options_income
+2. **Configure environment variables on HOST**:
+   - Set `SCHWAB_CLIENT_ID` to your client ID from Schwab Developer Portal
+   - Set `SCHWAB_CLIENT_SECRET` to your client secret from Schwab Developer Portal
+   - Method: export command or shell configuration file
 
-# 4. Run authorization script ON HOST
-python scripts/authorize_schwab_host.py
+3. **Navigate to project directory**:
+   - Change to: /workspaces/options_income
 
-# 5. Browser opens automatically for Schwab login
-# Complete authorization in browser
+4. **Execute authorization script**:
+   - Script: scripts/authorize_schwab_host.py
+   - Execution context: HOST machine (not container)
+   - Expected behavior: Starts HTTPS server, opens browser
 
-# 6. Verify tokens saved
-cat /workspaces/options_income/.schwab_tokens.json
+5. **Complete browser authorization**:
+   - Browser opens automatically to Schwab login page
+   - User logs in with Schwab credentials
+   - User selects accounts to authorize
+   - Browser redirects back to local callback server
+   - Server receives authorization code and exchanges for tokens
 
-# 7. Add to .gitignore if not already present
-echo ".schwab_tokens.json" >> .gitignore
-```
+6. **Verify token storage**:
+   - Check file exists: /workspaces/options_income/.schwab_tokens.json
+   - File should contain JSON with access_token and refresh_token fields
+
+7. **Update .gitignore**:
+   - Add entry: .schwab_tokens.json
+   - Prevents accidental commit of sensitive credentials
 
 ### 8.3 Application Usage (CONTAINER)
 
-Once authorized, use the application normally **inside the devcontainer**:
+Once authorized, use the application normally **inside the devcontainer**.
 
-```bash
-# Inside devcontainer
-wheel recommend NVDA --broker schwab
-```
+**Example Command**:
+- Command: wheel recommend NVDA --broker schwab
+- Execution context: Inside devcontainer
 
-The application will:
-1. Load tokens from `/workspaces/options_income/.schwab_tokens.json`
-2. Auto-refresh before expiry (writes back to same file)
-3. Make API calls with valid Bearer token
+**Application Workflow**:
+1. **Token Loading**:
+   - Reads tokens from `/workspaces/options_income/.schwab_tokens.json`
+   - Parses JSON to extract access_token and refresh_token
+
+2. **Token Refresh** (automatic):
+   - Checks token expiration before each API call
+   - If expiring within 5 minutes, automatically refreshes
+   - Writes refreshed tokens back to same file
+   - Transparent to user
+
+3. **API Calls**:
+   - Includes Bearer token in Authorization header
+   - Makes authenticated requests to Schwab API
+   - Retrieves account data, options chains, etc.
 
 ### 8.4 Token Management
 
@@ -1361,10 +1068,9 @@ The application will:
 
 ### C. Required Python Packages
 
-```
-flask>=2.0.0
-requests>=2.31.0
-```
+**Dependencies**:
+- flask: Version 2.0.0 or higher (for HTTPS callback server)
+- requests: Version 2.31.0 or higher (for OAuth token exchange and API calls)
 
 ---
 

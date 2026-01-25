@@ -15,8 +15,34 @@ A Python-based system for optimizing covered call and cash-secured put strategie
 
 ### Data Sources
 
-- **Finnhub**: Options chains, earnings calendar
-- **Alpha Vantage**: Historical price data with dividends and splits
+- **Finnhub**: Options chains, earnings calendar (free tier)
+- **Alpha Vantage**: Historical price data with dividends and splits (free tier)
+- **Schwab**: Live market data, options chains, account data, positions (OAuth 2.0 authentication)
+
+### Schwab Integration
+
+The system now supports **Charles Schwab** as a premium data source with OAuth 2.0 authentication. This provides:
+
+- **Real-time market data** (quotes, options chains)
+- **Account access** (positions, balances)
+- **Automated trading** (coming soon)
+- **Token auto-refresh** (seamless 7-day authorization)
+
+#### Quick Setup
+
+1. **Get Schwab Developer credentials**: [https://developer.schwab.com](https://developer.schwab.com)
+2. **Configure OAuth**: See [docs/SCHWAB_OAUTH_SETUP.md](docs/SCHWAB_OAUTH_SETUP.md) for detailed setup
+3. **Authorize** (one-time, on host machine):
+   ```bash
+   python scripts/authorize_schwab_host.py
+   ```
+4. **Use Schwab data** in wheel CLI:
+   ```bash
+   python -m src.wheel.cli --broker schwab status
+   python -m src.wheel.cli --broker schwab recommend AAPL
+   ```
+
+For complete setup instructions including SSL certificates, port forwarding, and container architecture, see the [Schwab OAuth Setup Guide](docs/SCHWAB_OAUTH_SETUP.md).
 
 ## Quick Start
 
@@ -44,6 +70,158 @@ ALPHA_VANTAGE_API_KEY=your_alpha_vantage_key
 ```bash
 python example_end_to_end.py
 ```
+
+## Sample Programs
+
+### example_end_to_end.py
+
+**Purpose:** Demonstrates the complete options analysis pipeline with live data from free API tiers.
+
+**What It Does:**
+- Fetches historical price data (Alpha Vantage TIME_SERIES_DAILY)
+- Retrieves options chains (Finnhub free tier)
+- Calculates multiple volatility models (Close-to-Close, Parkinson, Garman-Klass, Yang-Zhang)
+- Performs volatility blending and regime analysis
+- Demonstrates strike optimization with sigma-based calculations
+- Analyzes covered calls, cash-secured puts, and wheel strategy
+- Runs weekly overlay scanner on portfolio holdings
+- Builds multi-week ladder positions
+
+**Arguments:** None (edit symbol in source to change ticker)
+
+**Sample Usage:**
+```bash
+# Run the complete demonstration
+python example_end_to_end.py
+
+# Output includes:
+# - Historical price data fetch with API usage tracking
+# - Realized volatility calculations (30/60 days, multiple models)
+# - Implied volatility extraction from options chain
+# - Blended volatility with regime analysis
+# - Strike recommendations at various sigma levels
+# - Covered call/put analysis with risk metrics
+# - Weekly overlay scanner recommendations
+# - Multi-week ladder position allocation
+```
+
+**Prerequisites:**
+- Environment variables: `FINNHUB_API_KEY`, `ALPHA_VANTAGE_API_KEY`
+- Or `.env` file with API keys
+
+---
+
+### wheel_strategy_tool.py
+
+**Purpose:** Production-ready CLI tool for managing wheel strategy positions across multiple symbols.
+
+**What It Does:**
+- Tracks wheel positions through full lifecycle (cash → puts → shares → calls → cash)
+- Provides real-time recommendations for next option to sell
+- Calculates optimal strikes using volatility and risk profiles
+- Records all trades with premium tracking
+- Monitors performance metrics (realized gains, unrealized P&L, total returns)
+- Maintains SQLite database for position persistence
+
+**Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `init` | Initialize new wheel position with capital and/or shares |
+| `recommend` | Get recommendation for next option to sell |
+| `record` | Record a sold option and collect premium |
+| `expire` | Record expiration outcome (expired/assigned) |
+| `close` | Close an open trade early (buy back option) |
+| `status` | View current wheel status and open positions |
+| `history` | View complete trade history for a symbol |
+| `performance` | View detailed performance metrics |
+| `list` | List all active wheel positions |
+| `archive` | Archive/close a completed wheel position |
+| `update` | Update wheel settings (capital, risk profile) |
+
+**Arguments:**
+
+**Global Options:**
+- `--db TEXT` - Database file path (default: `wheel_positions.db`)
+- `-v, --verbose` - Verbose output with detailed logging
+- `--json` - JSON output format (where supported)
+
+**Sample Usage:**
+
+```bash
+# Initialize a new wheel position with cash (to sell puts)
+python wheel_strategy_tool.py init AAPL --capital 15000
+
+# Initialize with existing shares (to sell calls)
+python wheel_strategy_tool.py init NVDA --shares 200 --cost-basis 150
+
+# Initialize with both cash and shares
+python wheel_strategy_tool.py init TSLA --capital 10000 --shares 100 --cost-basis 245
+
+# Get recommendation for specific symbol
+python wheel_strategy_tool.py recommend AAPL
+
+# Get recommendations for all active wheels
+python wheel_strategy_tool.py recommend --all
+
+# Record a sold put option
+python wheel_strategy_tool.py record AAPL \
+  --action sell \
+  --option-type put \
+  --strike 150 \
+  --expiry 2026-02-21 \
+  --premium 2.50 \
+  --contracts 1
+
+# Record a sold covered call
+python wheel_strategy_tool.py record NVDA \
+  --action sell \
+  --option-type call \
+  --strike 200 \
+  --expiry 2026-02-21 \
+  --premium 3.75 \
+  --contracts 2
+
+# Record expiration outcome
+python wheel_strategy_tool.py expire AAPL --strike 150 --expiry 2026-02-21 --expired
+
+# Close trade early (buy back option)
+python wheel_strategy_tool.py close AAPL \
+  --strike 150 \
+  --expiry 2026-02-21 \
+  --close-premium 0.50
+
+# View current status
+python wheel_strategy_tool.py status AAPL
+
+# View all active wheels
+python wheel_strategy_tool.py status --all
+
+# View trade history
+python wheel_strategy_tool.py history AAPL
+
+# View performance metrics
+python wheel_strategy_tool.py performance AAPL
+
+# List all positions
+python wheel_strategy_tool.py list
+
+# Archive completed wheel
+python wheel_strategy_tool.py archive AAPL
+```
+
+**Risk Profiles:**
+- `aggressive` - Higher premiums, more assignment risk (0.5-1.0σ, 30-40% ITM probability)
+- `moderate` - Balanced approach (1.0-1.5σ, 15-30% ITM probability)
+- `conservative` - Lower risk, steady income (1.5-2.0σ, 7-15% ITM probability)
+- `defensive` - Maximum protection (2.0-2.5σ, 2-7% ITM probability)
+
+**Database:**
+- SQLite database stores all positions, trades, and history
+- Default location: `wheel_positions.db` in current directory
+- Portable - can be backed up or moved between systems
+
+---
 
 ## Usage Examples
 
@@ -196,6 +374,15 @@ options_income/
 │   │   ├── strategies.py      # Covered call/put results
 │   │   ├── overlay.py         # Scanner models
 │   │   └── ladder.py          # Ladder builder models
+│   ├── wheel/                  # Wheel strategy implementation
+│   │   ├── cli.py             # Command-line interface
+│   │   ├── manager.py         # Position management
+│   │   ├── recommend.py       # Recommendation engine
+│   │   └── repository.py      # Database operations
+│   ├── oauth/                  # Schwab OAuth integration
+│   │   ├── coordinator.py     # High-level OAuth interface
+│   │   ├── token_manager.py   # Token lifecycle management
+│   │   └── auth_server.py     # HTTPS callback server
 │   ├── cache/                  # Caching infrastructure
 │   ├── volatility.py          # Volatility calculations
 │   ├── strike_optimizer.py    # Strike selection and probabilities
@@ -206,9 +393,18 @@ options_income/
 │   ├── earnings_calendar.py   # Earnings date tracking
 │   ├── finnhub_client.py      # Finnhub API client
 │   └── price_fetcher.py       # Alpha Vantage price fetcher
-├── tests/                      # 446 unit tests
+├── scripts/
+│   ├── authorize_schwab_host.py   # OAuth authorization (HOST)
+│   └── check_schwab_auth.py       # OAuth status checker (CONTAINER)
+├── tests/                      # 105 OAuth + 446 core tests
 ├── docs/                       # Documentation
-└── example_end_to_end.py      # Complete workflow example
+│   ├── prd.md                 # Product requirements
+│   ├── system_design.md       # System architecture
+│   ├── oauth_design.md        # OAuth design specification
+│   ├── oauth_requirements.md  # OAuth requirements
+│   └── CONTAINER_ARCHITECTURE.md  # Container deployment guide
+├── example_end_to_end.py      # Complete workflow example
+└── wheel_strategy_tool.py     # Production wheel strategy CLI
 ```
 
 ## Testing
@@ -222,9 +418,18 @@ pytest --cov=src --cov-report=html
 
 # Run specific test file
 pytest tests/test_risk_analyzer.py -v
+
+# Run OAuth tests only
+pytest tests/oauth/ -v
+
+# Run wheel strategy tests only
+pytest tests/wheel/ -v
 ```
 
-Current: 446 tests, 79% coverage
+**Current Test Coverage:**
+- Core modules: 446 tests, 79% coverage
+- OAuth module: 105 tests, 93% coverage
+- **Total: 551 tests**
 
 ## Code Quality
 

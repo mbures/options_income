@@ -14,6 +14,7 @@ from typing import Optional
 from src.finnhub_client import FinnhubClient
 from src.models.profiles import StrikeProfile
 from src.price_fetcher import AlphaVantagePriceDataFetcher
+from src.schwab.client import SchwabClient
 
 from .exceptions import (
     DuplicateSymbolError,
@@ -51,6 +52,7 @@ class WheelManager:
         db_path: str = "~/.wheel_strategy/trades.db",
         finnhub_client: Optional[FinnhubClient] = None,
         price_fetcher: Optional[AlphaVantagePriceDataFetcher] = None,
+        schwab_client: Optional[SchwabClient] = None,
     ):
         """
         Initialize the wheel manager.
@@ -59,10 +61,12 @@ class WheelManager:
             db_path: Path to SQLite database file
             finnhub_client: Optional FinnhubClient for live data
             price_fetcher: Optional price data fetcher
+            schwab_client: Optional SchwabClient for market data
         """
         self.repository = WheelRepository(db_path)
-        self.recommend_engine = RecommendEngine(finnhub_client, price_fetcher)
+        self.recommend_engine = RecommendEngine(finnhub_client, price_fetcher, schwab_client)
         self.performance_tracker = PerformanceTracker(self.repository)
+        self.schwab = schwab_client
 
     # --- Wheel CRUD Operations ---
 

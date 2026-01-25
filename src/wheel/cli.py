@@ -14,7 +14,9 @@ import click
 from src.cache import LocalFileCache
 from src.config import AlphaVantageConfig, FinnhubConfig
 from src.finnhub_client import FinnhubClient
+from src.oauth.coordinator import OAuthCoordinator
 from src.price_fetcher import AlphaVantagePriceDataFetcher
+from src.schwab.client import SchwabClient
 
 from .exceptions import (
     DuplicateSymbolError,
@@ -146,8 +148,14 @@ def _print_performance(perf: WheelPerformance, verbose: bool = False) -> None:
 )
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.option("--json", "output_json", is_flag=True, help="JSON output (where supported)")
+@click.option(
+    "--broker",
+    type=click.Choice(["schwab", "finnhub"], case_sensitive=False),
+    default="finnhub",
+    help="Market data broker (default: finnhub)",
+)
 @click.pass_context
-def cli(ctx: click.Context, db: str, verbose: bool, output_json: bool) -> None:
+def cli(ctx: click.Context, db: str, verbose: bool, output_json: bool, broker: str) -> None:
     """
     Wheel Strategy Tool - Manage options wheel positions.
 
@@ -159,16 +167,34 @@ def cli(ctx: click.Context, db: str, verbose: bool, output_json: bool) -> None:
     # Load API configurations
     finnhub_client = None
     price_fetcher = None
+    schwab_client = None
 
-    try:
-        # Try to load Finnhub configuration
-        finnhub_config = FinnhubConfig.from_file()
-        finnhub_client = FinnhubClient(finnhub_config)
-        if verbose:
-            click.echo("✓ Finnhub client configured")
-    except (FileNotFoundError, ValueError) as e:
-        if verbose:
-            click.echo(f"⚠ Finnhub not configured: {e}", err=True)
+    # Initialize Schwab client if selected
+    if broker.lower() == "schwab":
+        try:
+            oauth = OAuthCoordinator()
+            schwab_client = SchwabClient(oauth_coordinator=oauth)
+            if verbose:
+                click.echo("✓ Schwab client configured")
+        except Exception as e:
+            if verbose:
+                click.echo(f"⚠ Schwab not configured: {e}", err=True)
+            # Fall back to Finnhub
+            broker = "finnhub"
+            if verbose:
+                click.echo("→ Falling back to Finnhub")
+
+    # Initialize Finnhub client if selected or as fallback
+    if broker.lower() == "finnhub" or schwab_client is None:
+        try:
+            # Try to load Finnhub configuration
+            finnhub_config = FinnhubConfig.from_file()
+            finnhub_client = FinnhubClient(finnhub_config)
+            if verbose:
+                click.echo("✓ Finnhub client configured")
+        except (FileNotFoundError, ValueError) as e:
+            if verbose:
+                click.echo(f"⚠ Finnhub not configured: {e}", err=True)
 
     try:
         # Try to load Alpha Vantage configuration
@@ -188,9 +214,11 @@ def cli(ctx: click.Context, db: str, verbose: bool, output_json: bool) -> None:
         db_path=db,
         finnhub_client=finnhub_client,
         price_fetcher=price_fetcher,
+        schwab_client=schwab_client,
     )
     ctx.obj["verbose"] = verbose
     ctx.obj["json"] = output_json
+    ctx.obj["broker"] = broker
 
 
 @cli.command()

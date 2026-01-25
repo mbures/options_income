@@ -15,6 +15,7 @@ from src.finnhub_client import FinnhubClient
 from src.models import PROFILE_SIGMA_RANGES, OptionsChain, StrikeProfile
 from src.options_service import OptionsChainService
 from src.price_fetcher import AlphaVantagePriceDataFetcher
+from src.schwab.client import SchwabClient
 from src.strike_optimizer import StrikeOptimizer
 from src.utils import calculate_days_to_expiry
 from src.volatility import VolatilityCalculator
@@ -51,6 +52,7 @@ class RecommendEngine:
         self,
         finnhub_client: Optional[FinnhubClient] = None,
         price_fetcher: Optional[AlphaVantagePriceDataFetcher] = None,
+        schwab_client: Optional[SchwabClient] = None,
     ):
         """
         Initialize the recommendation engine.
@@ -58,9 +60,11 @@ class RecommendEngine:
         Args:
             finnhub_client: Optional FinnhubClient for options data
             price_fetcher: Optional price data fetcher
+            schwab_client: Optional SchwabClient for market data
         """
         self.finnhub = finnhub_client
         self.price_fetcher = price_fetcher
+        self.schwab = schwab_client
 
         # Initialize core components
         self.strike_optimizer = StrikeOptimizer()
