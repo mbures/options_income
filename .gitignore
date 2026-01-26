@@ -1,6 +1,7 @@
 # API Keys
 api_key.txt
 config/finhub_api_key.txt
+config/charles_schwab_key.txt
 finhub_api_key.txt
 alpha_vantage_api_key.txt
 
@@ -11,6 +12,9 @@ alpha_vantage_api_key.txt
 
 # Cache directory
 cache/
+
+# Certs directory
+certs/
 
 # Python Virtual Environments
 venv/

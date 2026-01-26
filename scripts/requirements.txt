@@ -1,0 +1,11 @@
+# Minimal requirements for host-side OAuth authorization script
+# This allows running authorize_schwab_host.py outside the devcontainer
+
+# OAuth callback server
+flask>=3.0.0
+
+# HTTP requests for token exchange
+requests>=2.31.0
+
+# Note: No other dependencies needed - OAuth modules use only standard library
+# beyond flask and requests

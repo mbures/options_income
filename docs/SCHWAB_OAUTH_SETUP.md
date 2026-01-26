@@ -8,11 +8,12 @@ This guide walks you through setting up OAuth 2.0 authentication with Charles Sc
 - [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
 - [Step 1: Schwab Developer Portal Setup](#step-1-schwab-developer-portal-setup)
-- [Step 2: SSL Certificate Setup](#step-2-ssl-certificate-setup)
-- [Step 3: Port Forwarding Configuration](#step-3-port-forwarding-configuration)
-- [Step 4: Environment Configuration](#step-4-environment-configuration)
-- [Step 5: Initial Authorization](#step-5-initial-authorization)
-- [Step 6: Using Schwab in Container](#step-6-using-schwab-in-container)
+- [Step 2: Host Environment Setup](#step-2-host-environment-setup)
+- [Step 3: SSL Certificate Setup](#step-3-ssl-certificate-setup)
+- [Step 4: Port Forwarding Configuration](#step-4-port-forwarding-configuration)
+- [Step 5: Environment Configuration](#step-5-environment-configuration)
+- [Step 6: Initial Authorization](#step-6-initial-authorization)
+- [Step 7: Using Schwab in Container](#step-7-using-schwab-in-container)
 - [Token Refresh](#token-refresh)
 - [Troubleshooting](#troubleshooting)
 - [Common Errors](#common-errors)
@@ -145,7 +146,67 @@ You'll need these for environment configuration.
 
 ---
 
-## Step 2: SSL Certificate Setup
+## Step 2: Host Environment Setup
+
+The authorization script runs on your host machine (not in the devcontainer), so you need to set up a lightweight Python environment.
+
+### 2.1 Automated Setup (Recommended)
+
+Run the setup script from your project root:
+
+```bash
+# Navigate to project directory on host
+cd /path/to/options_income
+
+# Run setup script
+bash scripts/setup_host.sh
+```
+
+This will:
+- Create a Python virtual environment in `scripts/venv/`
+- Install minimal dependencies (flask, requests)
+- Display usage instructions
+
+### 2.2 Manual Setup (Alternative)
+
+If you prefer manual control:
+
+```bash
+# Navigate to scripts directory
+cd scripts
+
+# Create virtual environment
+python3 -m venv venv
+
+# Activate venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Deactivate when done
+deactivate
+```
+
+### 2.3 Verify Setup
+
+```bash
+# Activate the virtual environment
+source scripts/venv/bin/activate
+
+# Check dependencies installed
+pip list | grep -E "flask|requests"
+
+# Should show:
+# flask       3.0.0
+# requests    2.31.0
+```
+
+**Note**: You'll activate this venv every time you run the authorization script. See [scripts/README.md](../scripts/README.md) for detailed usage instructions.
+
+---
+
+## Step 3: SSL Certificate Setup
 
 Schwab requires HTTPS for OAuth callbacks. You need a valid SSL certificate from a trusted Certificate Authority (CA).
 
@@ -208,11 +269,11 @@ python3 -m http.server --bind localhost 8443 \
 
 ---
 
-## Step 3: Port Forwarding Configuration
+## Step 4: Port Forwarding Configuration
 
 Your router must forward incoming HTTPS traffic (port 8443) from the public internet to your host machine.
 
-### 3.1 Find Your Host Machine IP
+### 4.1 Find Your Host Machine IP
 
 ```bash
 # Linux/macOS
@@ -224,7 +285,7 @@ ip addr show | grep "inet " | grep -v 127.0.0.1
 
 Note your local IP address (e.g., `192.168.1.100`)
 
-### 3.2 Configure Router
+### 4.2 Configure Router
 
 Router configurations vary, but general steps:
 
@@ -239,7 +300,7 @@ Router configurations vary, but general steps:
 
 4. Save and apply changes
 
-### 3.3 Verify Port Forwarding
+### 4.3 Verify Port Forwarding
 
 From an external network (mobile phone on cellular, not WiFi):
 
@@ -253,7 +314,7 @@ curl -I https://yourdomain.com:8443
 
 If you get "connection timed out" immediately, port forwarding may not be working.
 
-### 3.4 Firewall Rules
+### 4.4 Firewall Rules
 
 Ensure firewall allows inbound connections on port 8443:
 
@@ -273,9 +334,9 @@ sudo firewall-cmd --reload
 
 ---
 
-## Step 4: Environment Configuration
+## Step 5: Environment Configuration
 
-### 4.1 Set Environment Variables
+### 7.1 Set Environment Variables
 
 Add Schwab credentials to your environment:
 
@@ -300,7 +361,7 @@ source ~/.bashrc
 
 ⚠️ **Security Note**: Keep your client secret secure. Never commit it to version control.
 
-### 4.2 Verify Configuration
+### 7.2 Verify Configuration
 
 ```bash
 # Check environment variables are set
@@ -312,21 +373,28 @@ Both should print your credentials (not empty).
 
 ---
 
-## Step 5: Initial Authorization
+## Step 6: Initial Authorization
 
 Initial authorization **MUST be run on the HOST machine** (not in the container).
 
-### 5.1 Run Authorization Script on HOST
+### 6.1 Activate Virtual Environment
 
 ```bash
 # Navigate to project directory on HOST (not in container)
 cd /workspaces/options_income
 
-# Run authorization script
+# Activate the virtual environment (from Step 2)
+source scripts/venv/bin/activate
+```
+
+### 6.2 Run Authorization Script
+
+```bash
+# Run authorization script (venv must be activated)
 python scripts/authorize_schwab_host.py
 ```
 
-### 5.2 Authorization Flow
+### 6.3 Authorization Flow
 
 ```
 Starting Schwab OAuth authorization...
@@ -342,7 +410,7 @@ Authorize in browser: https://api.schwabapi.com/v1/oauth/authorize?...
 Waiting for authorization callback...
 ```
 
-### 5.3 Complete Browser Authorization
+### 6.4 Complete Browser Authorization
 
 1. **Browser opens automatically** to Schwab login page
 2. **Sign in** with your Schwab brokerage credentials
@@ -351,7 +419,7 @@ Waiting for authorization callback...
 5. Browser redirects to `https://yourdomain.com:8443/oauth/callback?code=...`
 6. Callback server receives the authorization code
 
-### 5.4 Token Exchange
+### 6.5 Token Exchange
 
 After receiving the callback:
 
@@ -368,7 +436,7 @@ Refresh token valid until: 2026-02-01 20:15:43
 You can now use the Schwab API from your devcontainer.
 ```
 
-### 5.5 Verify Token File
+### 6.6 Verify Token File
 
 ```bash
 # Check token file exists
@@ -382,11 +450,11 @@ ls -lh /workspaces/options_income/.schwab_tokens.json
 
 ---
 
-## Step 6: Using Schwab in Container
+## Step 7: Using Schwab in Container
 
 After initial authorization, you can use Schwab APIs from within the devcontainer.
 
-### 6.1 Start Devcontainer
+### 7.1 Start Devcontainer
 
 ```bash
 # Open VS Code
@@ -395,7 +463,7 @@ code .
 # Reopen in Container (Ctrl+Shift+P → "Reopen in Container")
 ```
 
-### 6.2 Verify Token Access from Container
+### 7.2 Verify Token Access from Container
 
 ```bash
 # Inside container
@@ -407,7 +475,7 @@ Expected output:
 {'authorized': True, 'access_token_expires': '2026-01-25T21:15:43+00:00', 'refresh_token_expires': '2026-02-01T20:15:43+00:00'}
 ```
 
-### 6.3 Use Schwab API
+### 7.3 Use Schwab API
 
 ```python
 from src.schwab.client import SchwabClient
@@ -424,7 +492,7 @@ chain = client.get_option_chain("AAPL", strike_count=10)
 print(f"Found {len(chain.contracts)} contracts")
 ```
 
-### 6.4 Use Wheel CLI with Schwab
+### 7.4 Use Wheel CLI with Schwab
 
 ```bash
 # Use Schwab as data source
@@ -532,7 +600,7 @@ export SCHWAB_SSL_KEY="/path/to/your/key.pem"
    curl -I https://yourdomain.com:8443
    ```
 
-3. Check router port forwarding rules (Step 3.2)
+3. Check router port forwarding rules (Step 4.2)
 
 ---
 
@@ -620,7 +688,7 @@ Authorize in browser: https://api.schwabapi.com/v1/oauth/authorize?...
 ### `ConfigurationError: Missing Schwab OAuth credentials`
 
 - Environment variables `SCHWAB_CLIENT_ID` and `SCHWAB_CLIENT_SECRET` not set
-- See Step 4.1 for configuration
+- See Step 5.1 for configuration
 
 ### `AuthorizationError: SSL certificate not found`
 

@@ -100,6 +100,8 @@ class SchwabOAuthConfig:
             SCHWAB_CALLBACK_HOST: Callback domain (default: dirtydata.ai)
             SCHWAB_CALLBACK_PORT: Callback port (default: 8443)
             SCHWAB_TOKEN_FILE: Token file path (default: /workspaces/options_income/.schwab_tokens.json)
+            SCHWAB_SSL_CERT_PATH: SSL certificate path (default: /etc/letsencrypt/live/dirtydata.ai/fullchain.pem)
+            SCHWAB_SSL_KEY_PATH: SSL private key path (default: /etc/letsencrypt/live/dirtydata.ai/privkey.pem)
 
         Returns:
             SchwabOAuthConfig instance
@@ -126,5 +128,11 @@ class SchwabOAuthConfig:
             callback_port=int(os.environ.get("SCHWAB_CALLBACK_PORT", "8443")),
             token_file=os.environ.get(
                 "SCHWAB_TOKEN_FILE", "/workspaces/options_income/.schwab_tokens.json"
+            ),
+            ssl_cert_path=os.environ.get(
+                "SCHWAB_SSL_CERT_PATH", "/etc/letsencrypt/live/dirtydata.ai/fullchain.pem"
+            ),
+            ssl_key_path=os.environ.get(
+                "SCHWAB_SSL_KEY_PATH", "/etc/letsencrypt/live/dirtydata.ai/privkey.pem"
             ),
         )
