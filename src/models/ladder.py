@@ -110,8 +110,10 @@ class LadderLeg:
         ask: Ask price of the option
         mid_price: Mid-point of bid/ask
         gross_premium: Expected premium (bid x 100 x contracts)
-        delta: Option delta
-        p_itm: Probability of finishing ITM
+        delta: Option delta (from Black-Scholes model)
+        p_itm: Probability of finishing ITM (from Black-Scholes model)
+        delta_chain: Delta from options chain (broker-provided, if available)
+        p_itm_from_delta: P(ITM) approximated from chain delta
         earnings_warning: Whether this leg spans earnings
         warnings: List of warnings for this leg
         is_actionable: Whether this leg can be executed
@@ -132,6 +134,9 @@ class LadderLeg:
     gross_premium: float = 0.0
     delta: float = 0.0
     p_itm: float = 0.0
+    # Explicit fields to distinguish model vs chain values
+    delta_chain: Optional[float] = None
+    p_itm_from_delta: Optional[float] = None
     earnings_warning: bool = False
     warnings: list[str] = field(default_factory=list)
     is_actionable: bool = True
@@ -161,6 +166,10 @@ class LadderLeg:
             "gross_premium": round(self.gross_premium, 2),
             "delta": round(self.delta, 4),
             "p_itm_pct": round(self.p_itm * 100, 2),
+            "delta_chain": round(self.delta_chain, 4) if self.delta_chain is not None else None,
+            "p_itm_from_delta_pct": round(self.p_itm_from_delta * 100, 2)
+            if self.p_itm_from_delta is not None
+            else None,
             "annualized_yield_pct": round(self.annualized_yield_pct, 2),
             "earnings_warning": self.earnings_warning,
             "warnings": self.warnings,

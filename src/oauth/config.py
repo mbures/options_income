@@ -8,6 +8,7 @@ variables or provided programmatically.
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from .exceptions import ConfigurationError
 
@@ -136,3 +137,62 @@ class SchwabOAuthConfig:
                 "SCHWAB_SSL_KEY_PATH", "/etc/letsencrypt/live/dirtydata.ai/privkey.pem"
             ),
         )
+
+    @classmethod
+    def from_file(cls, file_path: str = "config/charles_schwab_key.txt") -> "SchwabOAuthConfig":
+        """
+        Load configuration from a file.
+
+        The file should contain lines in the format:
+            app_key:your_client_id
+            secret:your_client_secret
+
+        Args:
+            file_path: Path to the credentials file (relative to project root)
+
+        Returns:
+            SchwabOAuthConfig instance
+
+        Raises:
+            ConfigurationError: If file not found or credentials cannot be parsed
+            FileNotFoundError: If the file does not exist
+        """
+        # Get the project root (parent of src directory)
+        project_root = Path(__file__).parent.parent.parent
+        full_path = project_root / file_path
+
+        if not full_path.exists():
+            raise FileNotFoundError(
+                f"Schwab credentials file not found at {full_path}. "
+                f"Please create the file with your Schwab App Key and Secret."
+            )
+
+        # Parse the file
+        client_id = None
+        client_secret = None
+
+        with open(full_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                    key = key.strip().lower()
+                    value = value.strip()
+
+                    if key == "app_key":
+                        client_id = value
+                    elif key == "secret":
+                        client_secret = value
+
+        if not client_id or not client_secret:
+            raise ConfigurationError(
+                f"Could not parse Schwab credentials from {full_path}. "
+                f"Expected format:\n"
+                f"  app_key:your_client_id\n"
+                f"  secret:your_client_secret"
+            )
+
+        return cls(client_id=client_id, client_secret=client_secret)

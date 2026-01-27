@@ -218,8 +218,8 @@ class CandidateStrike:
         contract: The option contract
         strike: Strike price
         expiration_date: Expiration date (YYYY-MM-DD)
-        delta: Option delta (computed via Black-Scholes)
-        p_itm: Probability of ITM at expiration
+        delta: Option delta (computed via Black-Scholes model)
+        p_itm: Probability of ITM at expiration (from Black-Scholes model)
         sigma_distance: Distance from current price in sigmas (diagnostic)
         bid: Bid price
         ask: Ask price
@@ -234,6 +234,10 @@ class CandidateStrike:
         total_net_credit: Net credit for all contracts
         annualized_yield_pct: Simple annualized yield (net credit / position value)
         days_to_expiry: Days until expiration
+        delta_model: Delta from Black-Scholes model calculation
+        p_itm_model: P(ITM) from Black-Scholes model calculation
+        delta_chain: Delta from options chain (broker-provided, if available)
+        p_itm_from_delta: P(ITM) approximated from chain delta (|delta| for calls)
         warnings: List of warning messages
         rejection_reasons: List of rejection reasons (if filtered out)
         rejection_details: Detailed rejection info
@@ -261,6 +265,11 @@ class CandidateStrike:
     total_net_credit: float
     annualized_yield_pct: float
     days_to_expiry: int
+    # Explicit P(ITM) fields to distinguish model vs chain values
+    delta_model: Optional[float] = None
+    p_itm_model: Optional[float] = None
+    delta_chain: Optional[float] = None
+    p_itm_from_delta: Optional[float] = None
     warnings: list[str] = field(default_factory=list)
     rejection_reasons: list[RejectionReason] = field(default_factory=list)
     rejection_details: list["RejectionDetail"] = field(default_factory=list)
@@ -289,6 +298,15 @@ class CandidateStrike:
             "total_net_credit": round(self.total_net_credit, 2),
             "annualized_yield_pct": round(self.annualized_yield_pct, 2),
             "days_to_expiry": self.days_to_expiry,
+            # Explicit P(ITM) fields: model vs chain
+            "delta_model": round(self.delta_model, 4) if self.delta_model is not None else None,
+            "p_itm_model_pct": round(self.p_itm_model * 100, 2)
+            if self.p_itm_model is not None
+            else None,
+            "delta_chain": round(self.delta_chain, 4) if self.delta_chain is not None else None,
+            "p_itm_from_delta_pct": round(self.p_itm_from_delta * 100, 2)
+            if self.p_itm_from_delta is not None
+            else None,
             "warnings": self.warnings,
             "rejection_reasons": [r.value for r in self.rejection_reasons],
             "rejection_details": [d.to_dict() for d in self.rejection_details],

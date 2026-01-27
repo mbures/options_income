@@ -248,3 +248,206 @@ class TestSchwabClient:
             assert len(calls) == 2
             assert calls[0][0][0] == 0.1  # First retry: 0.1 * 2^0
             assert calls[1][0][0] == 0.2  # Second retry: 0.1 * 2^1
+
+
+class TestSchwabClientPriceHistory:
+    """Tests for SchwabClient.get_price_history() method."""
+
+    @pytest.fixture
+    def mock_oauth(self):
+        """Create mock OAuth coordinator."""
+        oauth = mock.Mock(spec=OAuthCoordinator)
+        oauth.get_authorization_header.return_value = {
+            "Authorization": "Bearer test_token_123"
+        }
+        return oauth
+
+    @pytest.fixture
+    def client(self, mock_oauth):
+        """Create Schwab client with mocked OAuth and no cache."""
+        return SchwabClient(
+            oauth_coordinator=mock_oauth,
+            max_retries=2,
+            retry_delay=0.1,
+            enable_cache=False,
+        )
+
+    @pytest.fixture
+    def mock_price_history_response(self):
+        """Create mock Schwab price history response."""
+        return {
+            "symbol": "AAPL",
+            "empty": False,
+            "candles": [
+                {
+                    "open": 150.0,
+                    "high": 152.5,
+                    "low": 149.0,
+                    "close": 151.0,
+                    "volume": 1000000,
+                    "datetime": 1704067200000,  # 2024-01-01
+                },
+                {
+                    "open": 151.0,
+                    "high": 153.0,
+                    "low": 150.5,
+                    "close": 152.5,
+                    "volume": 1100000,
+                    "datetime": 1704153600000,  # 2024-01-02
+                },
+                {
+                    "open": 152.5,
+                    "high": 154.0,
+                    "low": 151.0,
+                    "close": 153.0,
+                    "volume": 1200000,
+                    "datetime": 1704240000000,  # 2024-01-03
+                },
+            ],
+        }
+
+    @mock.patch("src.schwab.client.requests.Session.request")
+    def test_get_price_history_success(self, mock_request, client, mock_price_history_response):
+        """get_price_history returns PriceData on successful API call."""
+        mock_response = mock.Mock()
+        mock_response.status_code = 200
+        mock_response.ok = True
+        mock_response.json.return_value = mock_price_history_response
+        mock_request.return_value = mock_response
+
+        price_data = client.get_price_history("AAPL")
+
+        # Verify PriceData structure
+        assert len(price_data.dates) == 3
+        assert len(price_data.opens) == 3
+        assert len(price_data.highs) == 3
+        assert len(price_data.lows) == 3
+        assert len(price_data.closes) == 3
+        assert len(price_data.volumes) == 3
+
+        # Verify data values
+        assert price_data.opens[0] == 150.0
+        assert price_data.closes[0] == 151.0
+        assert price_data.highs[1] == 153.0
+        assert price_data.lows[2] == 151.0
+        assert price_data.volumes[0] == 1000000
+
+    @mock.patch("src.schwab.client.requests.Session.request")
+    def test_get_price_history_date_parsing(self, mock_request, client, mock_price_history_response):
+        """get_price_history correctly parses timestamps to date strings."""
+        mock_response = mock.Mock()
+        mock_response.status_code = 200
+        mock_response.ok = True
+        mock_response.json.return_value = mock_price_history_response
+        mock_request.return_value = mock_response
+
+        price_data = client.get_price_history("AAPL")
+
+        # Dates should be in YYYY-MM-DD format
+        assert all("-" in d for d in price_data.dates)
+        assert all(len(d) == 10 for d in price_data.dates)
+
+    @mock.patch("src.schwab.client.requests.Session.request")
+    def test_get_price_history_normalizes_symbol(self, mock_request, client, mock_price_history_response):
+        """get_price_history normalizes symbol to uppercase."""
+        mock_response = mock.Mock()
+        mock_response.status_code = 200
+        mock_response.ok = True
+        mock_response.json.return_value = mock_price_history_response
+        mock_request.return_value = mock_response
+
+        client.get_price_history("aapl")
+
+        # Check the API was called with uppercase symbol in params
+        call_kwargs = mock_request.call_args[1]
+        assert call_kwargs["params"]["symbol"] == "AAPL"
+
+    @mock.patch("src.schwab.client.requests.Session.request")
+    def test_get_price_history_default_params(self, mock_request, client, mock_price_history_response):
+        """get_price_history uses correct default parameters."""
+        mock_response = mock.Mock()
+        mock_response.status_code = 200
+        mock_response.ok = True
+        mock_response.json.return_value = mock_price_history_response
+        mock_request.return_value = mock_response
+
+        client.get_price_history("AAPL")
+
+        call_kwargs = mock_request.call_args[1]
+        params = call_kwargs["params"]
+        assert params["periodType"] == "month"
+        assert params["period"] == 3
+        assert params["frequencyType"] == "daily"
+        assert params["frequency"] == 1
+
+    @mock.patch("src.schwab.client.requests.Session.request")
+    def test_get_price_history_custom_params(self, mock_request, client, mock_price_history_response):
+        """get_price_history accepts custom parameters."""
+        mock_response = mock.Mock()
+        mock_response.status_code = 200
+        mock_response.ok = True
+        mock_response.json.return_value = mock_price_history_response
+        mock_request.return_value = mock_response
+
+        client.get_price_history(
+            "AAPL",
+            period_type="year",
+            period=1,
+            frequency_type="weekly",
+            frequency=1,
+        )
+
+        call_kwargs = mock_request.call_args[1]
+        params = call_kwargs["params"]
+        assert params["periodType"] == "year"
+        assert params["period"] == 1
+        assert params["frequencyType"] == "weekly"
+
+    @mock.patch("src.schwab.client.requests.Session.request")
+    def test_get_price_history_empty_response(self, mock_request, client):
+        """get_price_history raises error on empty candles."""
+        mock_response = mock.Mock()
+        mock_response.status_code = 200
+        mock_response.ok = True
+        mock_response.json.return_value = {
+            "symbol": "INVALID",
+            "empty": True,
+            "candles": [],
+        }
+        mock_request.return_value = mock_response
+
+        with pytest.raises(SchwabAPIError, match="No price data returned"):
+            client.get_price_history("INVALID")
+
+    @mock.patch("src.schwab.client.requests.Session.request")
+    def test_get_price_history_invalid_symbol(self, mock_request, client):
+        """get_price_history raises error on 404."""
+        mock_response = mock.Mock()
+        mock_response.status_code = 404
+        mock_response.text = "Symbol not found"
+        mock_request.return_value = mock_response
+
+        with pytest.raises(SchwabInvalidSymbolError):
+            client.get_price_history("INVALID123")
+
+    def test_get_price_history_uses_cache(self, mock_oauth, mock_price_history_response):
+        """get_price_history uses cache when enabled."""
+        client = SchwabClient(
+            oauth_coordinator=mock_oauth,
+            enable_cache=True,
+        )
+
+        with mock.patch("src.schwab.client.requests.Session.request") as mock_request:
+            mock_response = mock.Mock()
+            mock_response.status_code = 200
+            mock_response.ok = True
+            mock_response.json.return_value = mock_price_history_response
+            mock_request.return_value = mock_response
+
+            # First call - should hit API
+            client.get_price_history("AAPL")
+            assert mock_request.call_count == 1
+
+            # Second call - should use cache
+            client.get_price_history("AAPL")
+            assert mock_request.call_count == 1  # No additional API call

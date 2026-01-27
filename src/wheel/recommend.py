@@ -14,11 +14,14 @@ from src.earnings_calendar import EarningsCalendar
 from src.finnhub_client import FinnhubClient
 from src.models import PROFILE_SIGMA_RANGES, OptionsChain, StrikeProfile
 from src.options_service import OptionsChainService
-from src.price_fetcher import AlphaVantagePriceDataFetcher
+from src.price_fetcher import SchwabPriceDataFetcher
 from src.schwab.client import SchwabClient
 from src.strike_optimizer import StrikeOptimizer
 from src.utils import calculate_days_to_expiry
 from src.volatility import VolatilityCalculator
+
+# Type alias for price fetcher
+PriceFetcher = SchwabPriceDataFetcher
 
 from .exceptions import DataFetchError, InvalidStateError
 from .models import WheelPosition, WheelRecommendation
@@ -51,16 +54,16 @@ class RecommendEngine:
     def __init__(
         self,
         finnhub_client: Optional[FinnhubClient] = None,
-        price_fetcher: Optional[AlphaVantagePriceDataFetcher] = None,
+        price_fetcher: Optional[PriceFetcher] = None,
         schwab_client: Optional[SchwabClient] = None,
     ):
         """
         Initialize the recommendation engine.
 
         Args:
-            finnhub_client: Optional FinnhubClient for options data
-            price_fetcher: Optional price data fetcher
-            schwab_client: Optional SchwabClient for market data
+            finnhub_client: Optional FinnhubClient for earnings calendar
+            price_fetcher: Optional price data fetcher (AlphaVantage or Schwab)
+            schwab_client: Optional SchwabClient for market data and options
         """
         self.finnhub = finnhub_client
         self.price_fetcher = price_fetcher
@@ -166,14 +169,21 @@ class RecommendEngine:
 
     def _fetch_options_chain(self, symbol: str) -> OptionsChain:
         """Fetch options chain from API."""
-        if self.finnhub is None:
-            raise DataFetchError("No Finnhub client configured")
-
-        try:
-            service = OptionsChainService(self.finnhub)
-            return service.get_options_chain(symbol)
-        except Exception as e:
-            raise DataFetchError(f"Failed to fetch options chain for {symbol}: {e}")
+        # Prefer Schwab, fall back to Finnhub
+        if self.schwab is not None:
+            try:
+                # Schwab client has options chain built-in
+                return self.schwab.get_option_chain(symbol)
+            except Exception as e:
+                raise DataFetchError(f"Failed to fetch options chain for {symbol}: {e}")
+        elif self.finnhub is not None:
+            try:
+                service = OptionsChainService(self.finnhub)
+                return service.get_options_chain(symbol)
+            except Exception as e:
+                raise DataFetchError(f"Failed to fetch options chain for {symbol}: {e}")
+        else:
+            raise DataFetchError("No market data client configured (need Schwab or Finnhub)")
 
     def _fetch_current_price(self, symbol: str) -> float:
         """Fetch current stock price."""

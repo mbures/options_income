@@ -3,10 +3,10 @@
 End-to-end example: Complete volatility calculation pipeline with live data.
 
 This example demonstrates:
-1. Fetching historical price data from Alpha Vantage (FREE tier)
-   - Uses TIME_SERIES_DAILY for OHLC + volume
-   - Note: Dividends/splits require premium TIME_SERIES_DAILY_ADJUSTED
-2. Fetching options chain from Finnhub (FREE tier)
+1. Fetching historical price data from Schwab API
+   - Uses /marketdata/v1/pricehistory for OHLC + volume
+   - Requires Schwab OAuth authentication
+2. Fetching options chain from Schwab API
 3. Extracting implied volatility
 4. Calculating realized volatility (multiple methods)
 5. Calculating blended volatility
@@ -28,16 +28,19 @@ This example demonstrates:
     - Aggregate metrics and summary
 
 Data Sources:
-- Historical OHLCV: Alpha Vantage TIME_SERIES_DAILY (free, 25 req/day)
-- Options Chain: Finnhub /stock/option-chain (free tier)
+- Historical OHLCV: Schwab API /marketdata/v1/pricehistory (OAuth required)
+- Options Chain: Schwab API /marketdata/v1/chains (OAuth required)
+- Earnings Calendar: Finnhub API (optional, free tier)
 
 API Documentation:
-- Alpha Vantage: https://www.alphavantage.co/documentation/
-- Finnhub: https://finnhub.io/docs/api
+- Schwab: https://developer.schwab.com/products/trader-api--individual
+- Finnhub: https://finnhub.io/docs/api (optional for earnings)
 """
 
-from src.cache import LocalFileCache
-from src.config import AlphaVantageConfig, FinnhubConfig
+from src.config import FinnhubConfig
+from src.oauth.config import SchwabOAuthConfig
+from src.oauth.coordinator import OAuthCoordinator
+from src.schwab.client import SchwabClient
 from src.covered_strategies import (
     CoveredCallAnalyzer,
     CoveredPutAnalyzer,
@@ -57,7 +60,7 @@ from src.overlay_scanner import (
     PortfolioHolding,
     ScannerConfig,
 )
-from src.price_fetcher import AlphaVantagePriceDataFetcher
+from src.price_fetcher import SchwabPriceDataFetcher
 from src.strike_optimizer import StrikeOptimizer, StrikeProfile
 from src.volatility import BlendWeights, VolatilityCalculator
 from src.volatility_integration import calculate_iv_term_structure, extract_atm_implied_volatility
@@ -75,44 +78,35 @@ def main():
     print(f"\nAnalyzing: {symbol}")
 
     try:
-        # Step 1: Fetch historical price data from Alpha Vantage (FREE tier)
+        # Step 1: Fetch historical price data from Schwab API
         print("\n" + "-" * 70)
-        print("STEP 1: Fetching Historical Price Data (Alpha Vantage)")
+        print("STEP 1: Fetching Historical Price Data (Schwab API)")
         print("-" * 70)
 
-        av_config = AlphaVantageConfig.from_file()
-        print("✓ Alpha Vantage configuration loaded")
+        # Load Schwab OAuth configuration from file
+        try:
+            oauth_config = SchwabOAuthConfig.from_file()
+            print("✓ Schwab credentials loaded from config/charles_schwab_key.txt")
+        except FileNotFoundError:
+            # Fallback to environment variables
+            oauth_config = SchwabOAuthConfig.from_env()
+            print("✓ Schwab credentials loaded from environment")
 
-        # Initialize file cache for persistent storage and API usage tracking
-        file_cache = LocalFileCache()
-        price_fetcher = AlphaVantagePriceDataFetcher(
-            av_config, enable_cache=True, file_cache=file_cache
-        )
+        # Initialize Schwab client with OAuth
+        oauth = OAuthCoordinator(config=oauth_config)
+        schwab_client = SchwabClient(oauth_coordinator=oauth)
+        print("✓ Schwab OAuth tokens loaded from .schwab_tokens.json")
 
-        # Show API usage status
-        usage = price_fetcher.get_usage_status()
-        print(
-            f"  API Usage Today: {usage['calls_today']}/{usage['daily_limit']} "
-            f"({usage['remaining']} remaining)"
-        )
+        # Initialize price fetcher with caching
+        price_fetcher = SchwabPriceDataFetcher(schwab_client, enable_cache=True)
 
-        # Fetch maximum available price data (100 days for free tier)
-        # This ensures sufficient history for 60-day volatility calculations
-        price_data = price_fetcher.fetch_price_data(
-            symbol, lookback_days=price_fetcher.MAX_LOOKBACK_DAYS
-        )
+        # Fetch 100 days of price data for volatility calculations
+        price_data = price_fetcher.fetch_price_data(symbol, lookback_days=100)
 
         print(f"\n✓ Fetched {len(price_data.dates)} days of price data")
         print(f"  Period: {price_data.dates[0]} to {price_data.dates[-1]}")
         print(f"  Latest Close: ${price_data.closes[-1]:.2f}")
         print(f"  Price Range: ${min(price_data.closes):.2f} - ${max(price_data.closes):.2f}")
-
-        # Note: Dividend and split data requires premium API (TIME_SERIES_DAILY_ADJUSTED)
-        # With free tier (TIME_SERIES_DAILY), these fields are not available
-        if price_data.dividends is None:
-            print("  Dividends: N/A (requires premium API)")
-        if price_data.split_coefficients is None:
-            print("  Stock Splits: N/A (requires premium API)")
 
         # Step 2: Calculate realized volatility
         print("\n" + "-" * 70)
@@ -154,23 +148,19 @@ def main():
                 f"{result_60.volatility * 100:>11.2f}%"
             )
 
-        # Step 3: Initialize Finnhub and fetch options chain
+        # Step 3: Fetch options chain from Schwab API
         print("\n" + "-" * 70)
-        print("STEP 3: Fetching Options Chain (Finnhub FREE tier)")
+        print("STEP 3: Fetching Options Chain (Schwab API)")
         print("-" * 70)
 
-        config = FinnhubConfig.from_file()
-        print("✓ Finnhub configuration loaded")
+        # Schwab client already has options chain support built-in
+        options_chain = schwab_client.get_option_chain(symbol)
 
-        with FinnhubClient(config) as client:
-            service = OptionsChainService(client)
-            options_chain = service.get_options_chain(symbol)
-
-            print("\n✓ Fetched options chain")
-            print(f"  Total Contracts: {len(options_chain.contracts)}")
-            print(f"  Calls: {len(options_chain.get_calls())}")
-            print(f"  Puts: {len(options_chain.get_puts())}")
-            print(f"  Expirations: {len(options_chain.get_expirations())}")
+        print("\n✓ Fetched options chain")
+        print(f"  Total Contracts: {len(options_chain.contracts)}")
+        print(f"  Calls: {len(options_chain.get_calls())}")
+        print(f"  Puts: {len(options_chain.get_puts())}")
+        print(f"  Expirations: {len(options_chain.get_expirations())}")
 
         # Step 4: Extract implied volatility from options
         print("\n" + "-" * 70)
@@ -182,8 +172,14 @@ def main():
             options_chain=options_chain, current_price=current_price
         )
 
+        # Validate IV - check for missing data (-999%) or negative values
+        iv_is_valid = atm_iv is not None and atm_iv > 0 and atm_iv < 10.0  # IV > 1000% is likely invalid
+
         if atm_iv:
             print(f"\n✓ ATM Implied Volatility: {atm_iv * 100:.2f}%")
+            if not iv_is_valid:
+                print("  ⚠ WARNING: Invalid IV data detected (likely -999% placeholder)")
+                print("  → Falling back to realized volatility only")
 
             # Show IV term structure
             print("\nIV Term Structure:")
@@ -203,36 +199,61 @@ def main():
             print("STEP 5: Calculating Blended Volatility")
             print("-" * 70)
 
-            # Default blend: 30% RV(20d) + 20% RV(60d) + 50% IV
-            blended_result = calculator.calculate_blended(
-                price_data=price_data, implied_volatility=atm_iv
-            )
+            if iv_is_valid:
+                # Default blend: 30% RV(20d) + 20% RV(60d) + 50% IV
+                blended_result = calculator.calculate_blended(
+                    price_data=price_data, implied_volatility=atm_iv
+                )
 
-            print("\nDefault Blend (30% / 20% / 50%):")
-            print(f"  Short-term RV (20d): {blended_result.metadata['rv_short'] * 100:>6.2f}%")
-            print(f"  Long-term RV (60d):  {blended_result.metadata['rv_long'] * 100:>6.2f}%")
-            print(f"  Implied Volatility:  {atm_iv * 100:>6.2f}%")
-            print(f"  → Blended Result:    {blended_result.volatility * 100:>6.2f}%")
+                print("\nDefault Blend (30% / 20% / 50%):")
+                print(f"  Short-term RV (20d): {blended_result.metadata['rv_short'] * 100:>6.2f}%")
+                print(f"  Long-term RV (60d):  {blended_result.metadata['rv_long'] * 100:>6.2f}%")
+                print(f"  Implied Volatility:  {atm_iv * 100:>6.2f}%")
+                print(f"  → Blended Result:    {blended_result.volatility * 100:>6.2f}%")
 
-            # Try aggressive blend (more IV weight)
-            aggressive_weights = BlendWeights(realized_short=0.20, realized_long=0.10, implied=0.70)
-            aggressive_result = calculator.calculate_blended(
-                price_data=price_data, implied_volatility=atm_iv, weights=aggressive_weights
-            )
+                # Try aggressive blend (more IV weight)
+                aggressive_weights = BlendWeights(realized_short=0.20, realized_long=0.10, implied=0.70)
+                aggressive_result = calculator.calculate_blended(
+                    price_data=price_data, implied_volatility=atm_iv, weights=aggressive_weights
+                )
 
-            print("\nAggressive Blend (20% / 10% / 70% - more IV):")
-            print(f"  → Blended Result:    {aggressive_result.volatility * 100:>6.2f}%")
+                print("\nAggressive Blend (20% / 10% / 70% - more IV):")
+                print(f"  → Blended Result:    {aggressive_result.volatility * 100:>6.2f}%")
 
-            # Try conservative blend (more RV weight)
-            conservative_weights = BlendWeights(
-                realized_short=0.40, realized_long=0.40, implied=0.20
-            )
-            conservative_result = calculator.calculate_blended(
-                price_data=price_data, implied_volatility=atm_iv, weights=conservative_weights
-            )
+                # Try conservative blend (more RV weight)
+                conservative_weights = BlendWeights(
+                    realized_short=0.40, realized_long=0.40, implied=0.20
+                )
+                conservative_result = calculator.calculate_blended(
+                    price_data=price_data, implied_volatility=atm_iv, weights=conservative_weights
+                )
 
-            print("\nConservative Blend (40% / 40% / 20% - more RV):")
-            print(f"  → Blended Result:    {conservative_result.volatility * 100:>6.2f}%")
+                print("\nConservative Blend (40% / 40% / 20% - more RV):")
+                print(f"  → Blended Result:    {conservative_result.volatility * 100:>6.2f}%")
+            else:
+                # Fall back to RV-only blend (60% short, 40% long)
+                print("\n⚠ IV data not available - using Realized Volatility only")
+                print("\nRV-Based Blend (60% short-term / 40% long-term):")
+
+                rv_short = results_20d["yang_zhang"].volatility
+                rv_long = results_60d["yang_zhang"].volatility
+                blended_vol = 0.6 * rv_short + 0.4 * rv_long
+
+                print(f"  Short-term RV (20d): {rv_short * 100:>6.2f}%")
+                print(f"  Long-term RV (60d):  {rv_long * 100:>6.2f}%")
+                print(f"  → Blended Result:    {blended_vol * 100:>6.2f}%")
+
+                # Create a mock result for consistency
+                from dataclasses import dataclass
+                @dataclass
+                class MockBlendedResult:
+                    volatility: float
+                    metadata: dict
+
+                blended_result = MockBlendedResult(
+                    volatility=blended_vol,
+                    metadata={'rv_short': rv_short, 'rv_long': rv_long, 'method': 'rv_only'}
+                )
 
             # Step 6: Summary and recommendations
             print("\n" + "-" * 70)
@@ -247,19 +268,25 @@ def main():
             print(f"  20-day: {best_rv_20.volatility * 100:.2f}%")
             print(f"  60-day: {best_rv_60.volatility * 100:.2f}%")
 
-            print("\nImplied vs. Realized:")
-            rv_iv_ratio = best_rv_20.volatility / atm_iv
-            print(f"  ATM IV: {atm_iv * 100:.2f}%")
-            print(f"  RV/IV Ratio: {rv_iv_ratio:.2f}")
+            if iv_is_valid:
+                print("\nImplied vs. Realized:")
+                rv_iv_ratio = best_rv_20.volatility / atm_iv
+                print(f"  ATM IV: {atm_iv * 100:.2f}%")
+                print(f"  RV/IV Ratio: {rv_iv_ratio:.2f}")
 
-            if rv_iv_ratio < 0.8:
-                regime = "LOW (RV < IV - options expensive)"
-            elif rv_iv_ratio < 1.2:
-                regime = "NORMAL (RV ≈ IV - fairly priced)"
+                if rv_iv_ratio < 0.8:
+                    regime = "LOW (RV < IV - options expensive)"
+                elif rv_iv_ratio < 1.2:
+                    regime = "NORMAL (RV ≈ IV - fairly priced)"
+                else:
+                    regime = "HIGH (RV > IV - options cheap)"
+
+                print(f"  Volatility Regime: {regime}")
             else:
-                regime = "HIGH (RV > IV - options cheap)"
-
-            print(f"  Volatility Regime: {regime}")
+                print("\nImplied vs. Realized:")
+                print(f"  ATM IV: Not available")
+                regime = "UNKNOWN (using RV only)"
+                print(f"  Volatility Regime: {regime}")
 
             print("\nRecommended Volatility for Calculations:")
             print(f"  → Use Blended: {blended_result.volatility * 100:.2f}%")
@@ -280,13 +307,9 @@ def main():
             put_recs = None  # Chain-backed recommendations (Step 8)
 
             if nearest_exp:
-                from datetime import datetime
+                from src.utils import calculate_days_to_expiry
 
-                try:
-                    exp_dt = datetime.fromisoformat(nearest_exp)
-                    days_to_expiry = max(1, (exp_dt - datetime.now()).days)
-                except (ValueError, TypeError):
-                    days_to_expiry = 30
+                days_to_expiry = calculate_days_to_expiry(nearest_exp, default=30)
 
                 print(f"\nUsing expiration: {nearest_exp} ({days_to_expiry} DTE)")
                 print(f"Using blended volatility: {blended_result.volatility * 100:.2f}%")
@@ -532,31 +555,38 @@ def main():
                     min_friction_multiple=2.0,  # Net credit >= 2x friction costs
                 )
 
-                # Initialize scanner
-                with FinnhubClient(config) as scan_client:
-                    scanner = OverlayScanner(
-                        finnhub_client=scan_client,
-                        strike_optimizer=optimizer,
-                        config=scanner_config,
-                    )
+                # Initialize scanner (try Finnhub for earnings, fall back to Schwab-only)
+                try:
+                    config = FinnhubConfig.from_file()
+                    finnhub_client = FinnhubClient(config)
+                    print("  Using Finnhub for earnings calendar detection")
+                except (FileNotFoundError, ValueError):
+                    finnhub_client = None
+                    print("  Finnhub not configured - earnings detection disabled")
 
-                    # Scan the portfolio
-                    print(f"\nScanning portfolio with {len(holdings)} holdings:")
-                    print(
-                        f"  Settings: {scanner_config.overwrite_cap_pct:.0f}% overwrite cap, "
-                        f"{scanner_config.delta_band.value} delta band"
-                    )
+                scanner = OverlayScanner(
+                    finnhub_client=finnhub_client,
+                    strike_optimizer=optimizer,
+                    config=scanner_config,
+                )
 
-                    scan_results = scanner.scan_portfolio(
-                        holdings=holdings,
-                        current_prices={symbol: current_price},
-                        options_chains={symbol: options_chain},
-                        volatilities={symbol: blended_result.volatility},
-                    )
+                # Scan the portfolio
+                print(f"\nScanning portfolio with {len(holdings)} holdings:")
+                print(
+                    f"  Settings: {scanner_config.overwrite_cap_pct:.0f}% overwrite cap, "
+                    f"{scanner_config.delta_band.value} delta band"
+                )
 
-                    # Display scan results
-                    result = scan_results.get(symbol)
-                    if result and not result.error:
+                scan_results = scanner.scan_portfolio(
+                    holdings=holdings,
+                    current_prices={symbol: current_price},
+                    options_chains={symbol: options_chain},
+                    volatilities={symbol: blended_result.volatility},
+                )
+
+                # Display scan results
+                result = scan_results.get(symbol)
+                if result and not result.error:
                         print(f"\n✓ Scan complete for {symbol}:")
                         print(f"  Shares: {result.shares_held}")
                         print(f"  Contracts available: {result.contracts_available}")
@@ -573,8 +603,8 @@ def main():
                             print("  " + "-" * 72)
 
                             for strike in result.recommended_strikes[:3]:
-                                # Per-contract net credit
-                                per_contract = strike.cost_estimate.net_credit
+                                # Per-contract net credit (use net_credit_per_share * 100)
+                                per_contract = strike.cost_estimate.net_credit_per_share * 100
                                 print(
                                     f"  ${strike.strike:>7.2f} "
                                     f"{strike.expiration_date:>12} "
@@ -589,7 +619,8 @@ def main():
                             # Show broker checklist for top recommendation
                             if result.broker_checklist:
                                 top = result.recommended_strikes[0]
-                                per_ct = top.cost_estimate.net_credit
+                                # Calculate per-contract net credit
+                                per_ct = top.cost_estimate.net_credit_per_share * 100
                                 print("\n  Broker Checklist (Top Recommendation):")
                                 checklist = result.broker_checklist
                                 print(f"    Action: {checklist.action}")
@@ -638,7 +669,7 @@ def main():
                                     print("  " + "-" * 82)
 
                                     for i, nm in enumerate(result.near_miss_candidates, 1):
-                                        per_ct = nm.cost_estimate.net_credit
+                                        per_ct = nm.cost_estimate.net_credit_per_share * 100
                                         print(
                                             f"  {i:>2} "
                                             f"${nm.strike:>7.2f} "
@@ -666,8 +697,8 @@ def main():
                                             )
 
                                         print()  # Blank line between candidates
-                    elif result and result.error:
-                        print(f"\n  ⚠ Error: {result.error}")
+                elif result and result.error:
+                    print(f"\n  ⚠ Error: {result.error}")
 
                 # Step 11: Ladder Builder
                 print("\n" + "-" * 70)
@@ -683,9 +714,9 @@ def main():
                     skip_earnings_weeks=True,
                 )
 
-                # Initialize builder
+                # Initialize builder (uses same finnhub_client as scanner for earnings)
                 builder = LadderBuilder(
-                    finnhub_client=scan_client, strike_optimizer=optimizer, config=ladder_config
+                    finnhub_client=finnhub_client, strike_optimizer=optimizer, config=ladder_config
                 )
 
                 # Build ladder for the symbol
@@ -762,7 +793,7 @@ def main():
                         weeks_to_ladder=4,
                         base_sigma=1.5,
                     )
-                    fw_builder = LadderBuilder(scan_client, optimizer, fw_config)
+                    fw_builder = LadderBuilder(finnhub_client, optimizer, fw_config)
                     fw_result = fw_builder.build_ladder(
                         symbol=symbol,
                         shares=holdings[0].shares,
@@ -841,10 +872,10 @@ def main():
             print("\n⚠ Could not extract implied volatility from options chain")
 
     except FileNotFoundError as e:
-        print(f"\n⚠ ERROR: API key file not found - {e}")
-        print("  Required API key files:")
-        print("    1. alpha_vantage_api_key.txt - Alpha Vantage API key (plain text)")
-        print("    2. config/finhub_api_key.txt - Finnhub API key")
+        print(f"\n⚠ ERROR: Configuration error - {e}")
+        print("  Required setup:")
+        print("    1. Schwab OAuth - run: python scripts/authorize_schwab_host.py")
+        print("    2. Optional: config/finhub_api_key.txt for earnings calendar")
         print("       Format: finhub_api_key = 'your_key_here'")
     except Exception as e:
         print(f"\n⚠ ERROR: {e}")

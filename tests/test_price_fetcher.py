@@ -8,10 +8,10 @@ import pytest
 
 from src.finnhub_client import FinnhubAPIError, FinnhubClient
 from src.price_fetcher import (
-    AlphaVantagePriceDataFetcher,
     CacheEntry,
     PriceDataCache,
     PriceDataFetcher,
+    SchwabPriceDataFetcher,
 )
 from src.volatility import PriceData
 
@@ -291,19 +291,14 @@ class TestPriceDataFetcher:
         client.get_candle_data.assert_called_once_with("AAPL", 20, "D")
 
 
-class TestAlphaVantagePriceDataFetcher:
-    """Test suite for AlphaVantagePriceDataFetcher class."""
+class TestSchwabPriceDataFetcher:
+    """Test suite for SchwabPriceDataFetcher class."""
 
-    def create_mock_client(self):
-        """Create a mock AlphaVantageClient."""
-        from src.alphavantage_client import AlphaVantageClient
+    def create_mock_schwab_client(self):
+        """Create a mock SchwabClient."""
+        from src.schwab.client import SchwabClient
 
-        client = Mock(spec=AlphaVantageClient)
-        client.config = Mock()
-        client.config.base_url = "https://www.alphavantage.co/query"
-        client.config.api_key = "test_key"
-        client.DAILY_LIMIT = 25
-        client.MAX_LOOKBACK_DAYS = 100
+        client = Mock(spec=SchwabClient)
         return client
 
     def create_mock_price_data(self, n_days=60):
@@ -316,74 +311,181 @@ class TestAlphaVantagePriceDataFetcher:
             lows=[99.0 + i * 0.1 for i in range(n_days)],
             closes=[101.0 + i * 0.1 for i in range(n_days)],
             volumes=[1000000 + i * 1000 for i in range(n_days)],
-            adjusted_closes=None,
-            dividends=None,
-            split_coefficients=None,
         )
 
-    def test_fetcher_initialization_with_client(self):
-        """Test fetcher initialization with client."""
-        client = self.create_mock_client()
-        fetcher = AlphaVantagePriceDataFetcher(client)
+    def test_fetcher_initialization(self):
+        """Test fetcher initialization with Schwab client."""
+        client = self.create_mock_schwab_client()
+        fetcher = SchwabPriceDataFetcher(client)
 
         assert fetcher._client == client
         assert fetcher.enable_cache is True
+        assert fetcher.cache is not None
+
+    def test_fetcher_with_custom_cache(self):
+        """Test fetcher with custom cache."""
+        client = self.create_mock_schwab_client()
+        custom_cache = PriceDataCache(max_age_seconds=1800)
+        fetcher = SchwabPriceDataFetcher(client, cache=custom_cache)
+
+        assert fetcher.cache == custom_cache
+        assert fetcher.cache.max_age_seconds == 1800
 
     def test_fetch_price_data_success(self):
-        """Test successful price data fetch."""
-        client = self.create_mock_client()
-        fetcher = AlphaVantagePriceDataFetcher(client, enable_cache=False)
+        """Test successful price data fetch from Schwab."""
+        client = self.create_mock_schwab_client()
+        fetcher = SchwabPriceDataFetcher(client, enable_cache=False)
 
         mock_price_data = self.create_mock_price_data(60)
-        client.fetch_daily_prices.return_value = mock_price_data
+        client.get_price_history.return_value = mock_price_data
 
-        price_data = fetcher.fetch_price_data("F", lookback_days=60)
+        price_data = fetcher.fetch_price_data("AAPL", lookback_days=60)
 
         assert isinstance(price_data, PriceData)
         assert len(price_data.dates) == 60
-        client.fetch_daily_prices.assert_called_once_with("F", 60)
+        assert len(price_data.closes) == 60
 
     def test_fetch_price_data_uses_cache(self):
         """Test that fetcher uses cached data."""
-        client = self.create_mock_client()
-        fetcher = AlphaVantagePriceDataFetcher(client, enable_cache=True)
+        client = self.create_mock_schwab_client()
+        fetcher = SchwabPriceDataFetcher(client, enable_cache=True)
 
         mock_price_data = self.create_mock_price_data(60)
-        client.fetch_daily_prices.return_value = mock_price_data
+        client.get_price_history.return_value = mock_price_data
 
-        # First fetch
-        fetcher.fetch_price_data("F", lookback_days=60)
-        assert client.fetch_daily_prices.call_count == 1
+        # First fetch - should hit client
+        fetcher.fetch_price_data("AAPL", lookback_days=60)
+        assert client.get_price_history.call_count == 1
 
         # Second fetch - should use cache
-        fetcher.fetch_price_data("F", lookback_days=60)
-        assert client.fetch_daily_prices.call_count == 1
+        fetcher.fetch_price_data("AAPL", lookback_days=60)
+        assert client.get_price_history.call_count == 1  # Still 1, no new call
 
-    def test_get_usage_status(self):
-        """Test getting API usage status."""
-        client = self.create_mock_client()
-        client.get_usage_status.return_value = {
-            "calls_today": 5,
-            "daily_limit": 25,
-            "remaining": 20,
-            "percentage_used": 20.0,
-        }
+    def test_lookback_to_schwab_params_short(self):
+        """Test conversion of short lookback to Schwab parameters."""
+        client = self.create_mock_schwab_client()
+        fetcher = SchwabPriceDataFetcher(client)
 
-        fetcher = AlphaVantagePriceDataFetcher(client)
-        status = fetcher.get_usage_status()
+        # 5 days -> day, 5
+        period_type, period = fetcher._lookback_to_schwab_params(5)
+        assert period_type == "day"
+        assert period == 5
 
-        assert status["calls_today"] == 5
-        assert status["remaining"] == 20
-        client.get_usage_status.assert_called_once()
+        # 10 days -> day, 10
+        period_type, period = fetcher._lookback_to_schwab_params(10)
+        assert period_type == "day"
+        assert period == 10
+
+    def test_lookback_to_schwab_params_medium(self):
+        """Test conversion of medium lookback to Schwab parameters."""
+        client = self.create_mock_schwab_client()
+        fetcher = SchwabPriceDataFetcher(client)
+
+        # 20 days -> month, 1
+        period_type, period = fetcher._lookback_to_schwab_params(20)
+        assert period_type == "month"
+        assert period == 1
+
+        # 60 days -> month, 2
+        period_type, period = fetcher._lookback_to_schwab_params(60)
+        assert period_type == "month"
+        assert period == 2
+
+        # 90 days -> month, 3
+        period_type, period = fetcher._lookback_to_schwab_params(90)
+        assert period_type == "month"
+        assert period == 3
+
+    def test_lookback_to_schwab_params_long(self):
+        """Test conversion of long lookback to Schwab parameters."""
+        client = self.create_mock_schwab_client()
+        fetcher = SchwabPriceDataFetcher(client)
+
+        # 252 days (1 trading year) -> year, 1
+        period_type, period = fetcher._lookback_to_schwab_params(252)
+        assert period_type == "year"
+        assert period == 1
+
+        # 500 days -> year, 2
+        period_type, period = fetcher._lookback_to_schwab_params(500)
+        assert period_type == "year"
+        assert period == 2
+
+    def test_fetch_price_data_calls_schwab_with_correct_params(self):
+        """Test that Schwab client is called with converted parameters."""
+        client = self.create_mock_schwab_client()
+        fetcher = SchwabPriceDataFetcher(client, enable_cache=False)
+
+        mock_price_data = self.create_mock_price_data(60)
+        client.get_price_history.return_value = mock_price_data
+
+        fetcher.fetch_price_data("AAPL", lookback_days=60)
+
+        client.get_price_history.assert_called_once_with(
+            symbol="AAPL",
+            period_type="month",
+            period=2,
+            frequency_type="daily",
+            frequency=1,
+        )
+
+    def test_fetch_multiple_windows(self):
+        """Test fetching multiple lookback windows."""
+        client = self.create_mock_schwab_client()
+        fetcher = SchwabPriceDataFetcher(client, enable_cache=False)
+
+        def mock_get_price_history(symbol, period_type, period, frequency_type, frequency):
+            # Return mock data based on period
+            if period_type == "month" and period == 1:
+                return self.create_mock_price_data(20)
+            elif period_type == "month" and period == 2:
+                return self.create_mock_price_data(60)
+            return self.create_mock_price_data(10)
+
+        client.get_price_history.side_effect = mock_get_price_history
+
+        results = fetcher.fetch_multiple_windows("AAPL", windows=[20, 60])
+
+        assert 20 in results
+        assert 60 in results
+
+    def test_clear_cache(self):
+        """Test clearing cache."""
+        client = self.create_mock_schwab_client()
+        fetcher = SchwabPriceDataFetcher(client)
+
+        # Add some data to cache
+        price_data = PriceData(dates=["2026-01-01"], closes=[100.0])
+        fetcher.cache.set("AAPL", 60, price_data)
+
+        fetcher.clear_cache()
+
+        assert fetcher.cache.get("AAPL", 60) is None
+
+    def test_clear_cache_specific_symbol(self):
+        """Test clearing cache for specific symbol."""
+        client = self.create_mock_schwab_client()
+        fetcher = SchwabPriceDataFetcher(client)
+
+        price_data = PriceData(dates=["2026-01-01"], closes=[100.0])
+        fetcher.cache.set("AAPL", 60, price_data)
+        fetcher.cache.set("TSLA", 60, price_data)
+
+        fetcher.clear_cache("AAPL")
+
+        assert fetcher.cache.get("AAPL", 60) is None
+        assert fetcher.cache.get("TSLA", 60) is not None
 
     def test_symbol_normalization(self):
         """Test that symbols are normalized to uppercase."""
-        client = self.create_mock_client()
-        fetcher = AlphaVantagePriceDataFetcher(client, enable_cache=False)
+        client = self.create_mock_schwab_client()
+        fetcher = SchwabPriceDataFetcher(client, enable_cache=False)
 
         mock_price_data = self.create_mock_price_data(20)
-        client.fetch_daily_prices.return_value = mock_price_data
+        client.get_price_history.return_value = mock_price_data
 
         fetcher.fetch_price_data("aapl", lookback_days=20)
 
-        client.fetch_daily_prices.assert_called_once_with("AAPL", 20)
+        # Verify Schwab client was called with uppercase symbol
+        call_kwargs = client.get_price_history.call_args[1]
+        assert call_kwargs["symbol"] == "AAPL"

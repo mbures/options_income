@@ -400,6 +400,34 @@ class TestExecutionCost:
         assert "net_credit" in d
         assert "net_credit_per_share" in d
 
+    def test_cost_includes_all_contracts(self, scanner):
+        """Test that cost_estimate.net_credit includes all contracts.
+
+        Regression test for double multiplication bug fix.
+        The calculate_execution_cost() method already multiplies by contracts,
+        so total_net_credit in CandidateStrike should equal cost_estimate.net_credit
+        (not cost_estimate.net_credit * contracts_available again).
+        """
+        # 3 contracts @ $2.00 bid, $2.10 ask
+        cost = scanner.calculate_execution_cost(bid=2.00, ask=2.10, contracts=3)
+
+        # gross_premium = 2.00 * 100 * 3 = 600.00
+        assert cost.gross_premium == 600.00
+
+        # commission = 0.65 * 3 = 1.95
+        assert cost.commission == pytest.approx(1.95, rel=0.01)
+
+        # slippage = 0.05 * 100 * 3 = 15.00 (half spread = 0.05)
+        assert cost.slippage == pytest.approx(15.00, rel=0.01)
+
+        # net_credit = 600.00 - 1.95 - 15.00 = 583.05 (total for all 3 contracts)
+        expected_net = 600.00 - 1.95 - 15.00
+        assert cost.net_credit == pytest.approx(expected_net, rel=0.01)
+
+        # IMPORTANT: net_credit already includes all contracts!
+        # CandidateStrike.total_net_credit should use cost_estimate.net_credit directly
+        # (not multiply by contracts_available again)
+
 
 # =============================================================================
 # Delta Band Tests
@@ -1186,6 +1214,63 @@ class TestScanHolding:
         assert "contracts_available" in d
         assert "recommended_strikes" in d
         assert "rejected_strikes" in d
+
+    def test_total_net_credit_equals_cost_estimate(
+        self, scanner, sample_holding, sample_options_chain
+    ):
+        """Test that CandidateStrike.total_net_credit equals cost_estimate.net_credit.
+
+        Regression test for double multiplication bug fix (Issue 2).
+        The calculate_execution_cost() method already multiplies by contracts,
+        so total_net_credit should equal cost_estimate.net_credit directly,
+        NOT cost_estimate.net_credit * contracts_available (which would double count).
+        """
+        scanner.earnings_calendar._cache["AAPL"] = ([], datetime.now().timestamp())
+
+        result = scanner.scan_holding(
+            holding=sample_holding,
+            current_price=185.50,
+            options_chain=sample_options_chain,
+            volatility=0.30,
+        )
+
+        # Check all candidates (recommended and rejected)
+        all_candidates = result.recommended_strikes + result.rejected_strikes
+
+        for candidate in all_candidates:
+            # CRITICAL: total_net_credit should equal cost_estimate.net_credit
+            # (NOT multiplied by contracts_available again)
+            assert candidate.total_net_credit == candidate.cost_estimate.net_credit, (
+                f"total_net_credit ({candidate.total_net_credit}) should equal "
+                f"cost_estimate.net_credit ({candidate.cost_estimate.net_credit}), "
+                f"not be multiplied by contracts_to_sell ({candidate.contracts_to_sell}) again"
+            )
+
+    def test_candidate_strike_has_explicit_pitm_fields(
+        self, scanner, sample_holding, sample_options_chain
+    ):
+        """Test that CandidateStrike has explicit P(ITM) fields populated.
+
+        Verifies Issue 4 fix: distinguish model vs chain delta/p_itm values.
+        """
+        scanner.earnings_calendar._cache["AAPL"] = ([], datetime.now().timestamp())
+
+        result = scanner.scan_holding(
+            holding=sample_holding,
+            current_price=185.50,
+            options_chain=sample_options_chain,
+            volatility=0.30,
+        )
+
+        all_candidates = result.recommended_strikes + result.rejected_strikes
+
+        for candidate in all_candidates:
+            # Model values should always be populated
+            assert candidate.delta_model is not None
+            assert candidate.p_itm_model is not None
+            # Primary delta/p_itm should match model values
+            assert candidate.delta == candidate.delta_model
+            assert candidate.p_itm == candidate.p_itm_model
 
 
 class TestScanPortfolio:

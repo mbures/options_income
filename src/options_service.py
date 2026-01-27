@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from .finnhub_client import FinnhubClient
+from .schwab.client import SchwabClient
 from .models import OptionContract, OptionsChain
 
 logger = logging.getLogger(__name__)
@@ -20,59 +21,70 @@ class OptionsChainService:
     """
     Service for retrieving and processing options chain data.
 
-    This service:
-    - Coordinates API client and data models
-    - Validates API responses
-    - Parses and transforms data
-    - Handles business logic
+    This service provides a unified interface for fetching options chains
+    regardless of the underlying data provider (Schwab or Finnhub).
+
+    Schwab is the primary provider. Finnhub support is deprecated and
+    will be removed in a future version.
     """
 
-    def __init__(self, client: FinnhubClient):
+    def __init__(self, client: SchwabClient | FinnhubClient):
         """
-        Initialize service with Finnhub client.
+        Initialize service with market data client.
 
         Args:
-            client: FinnhubClient instance for API calls
+            client: SchwabClient (recommended) or FinnhubClient (deprecated) for API calls
         """
         self.client = client
+        self._is_schwab = isinstance(client, SchwabClient)
 
-    def get_options_chain(self, symbol: str) -> OptionsChain:
+    def get_options_chain(
+        self,
+        symbol: str,
+        contract_type: Optional[str] = None,
+        strike_count: Optional[int] = None,
+    ) -> OptionsChain:
         """
         Retrieve and parse options chain for a symbol.
 
         Args:
             symbol: Stock ticker symbol
+            contract_type: Optional filter by "CALL", "PUT", or None for both (Schwab only)
+            strike_count: Optional number of strikes to return (Schwab only)
 
         Returns:
             OptionsChain object with parsed contracts
 
         Raises:
-            FinnhubAPIError: If API call fails
+            SchwabAPIError or FinnhubAPIError: If API call fails
             DataValidationError: If response is invalid
         """
-        # Fetch raw data from API
         logger.info(f"Fetching options chain for {symbol}")
-        raw_data = self.client.get_option_chain(symbol)
 
-        # Validate response structure
-        self._validate_response(raw_data)
+        if self._is_schwab:
+            # Schwab client returns fully parsed OptionsChain
+            return self.client.get_option_chain(
+                symbol=symbol,
+                contract_type=contract_type,
+                strike_count=strike_count,
+            )
+        else:
+            # Legacy Finnhub path - parse raw response
+            raw_data = self.client.get_option_chain(symbol)
+            self._validate_response(raw_data)
+            contracts = self._parse_contracts(raw_data, symbol)
 
-        # Parse contracts
-        contracts = self._parse_contracts(raw_data, symbol)
+            logger.info(
+                f"Parsed {len(contracts)} contracts for {symbol} "
+                f"({len([c for c in contracts if c.is_call])} calls, "
+                f"{len([c for c in contracts if c.is_put])} puts)"
+            )
 
-        # Log summary
-        logger.info(
-            f"Parsed {len(contracts)} contracts for {symbol} "
-            f"({len([c for c in contracts if c.is_call])} calls, "
-            f"{len([c for c in contracts if c.is_put])} puts)"
-        )
-
-        # Create options chain object
-        return OptionsChain(
-            symbol=symbol.upper(),
-            contracts=contracts,
-            retrieved_at=datetime.now(timezone.utc).isoformat(),
-        )
+            return OptionsChain(
+                symbol=symbol.upper(),
+                contracts=contracts,
+                retrieved_at=datetime.now(timezone.utc).isoformat(),
+            )
 
     def _validate_response(self, data: dict[str, Any]) -> None:
         """

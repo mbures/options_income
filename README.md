@@ -15,20 +15,20 @@ A Python-based system for optimizing covered call and cash-secured put strategie
 
 ### Data Sources
 
-- **Finnhub**: Options chains, earnings calendar (free tier)
-- **Alpha Vantage**: Historical price data with dividends and splits (free tier)
-- **Schwab**: Live market data, options chains, account data, positions (OAuth 2.0 authentication)
+- **Schwab API** (PRIMARY): Historical price data, options chains, account data, positions via OAuth 2.0
+- **Finnhub** (OPTIONAL): Earnings calendar only (free tier)
 
 ### Schwab Integration
 
-The system now supports **Charles Schwab** as a premium data source with OAuth 2.0 authentication. This provides:
+The system uses **Charles Schwab** as the primary data source with OAuth 2.0 authentication. This provides:
 
+- **Historical price data** (OHLCV data via /marketdata/v1/pricehistory)
 - **Real-time market data** (quotes, options chains)
 - **Account access** (positions, balances)
 - **Automated trading** (coming soon)
 - **Token auto-refresh** (seamless 7-day authorization)
 
-#### Quick Setup
+#### Setup Required
 
 1. **Get Schwab Developer credentials**: [https://developer.schwab.com](https://developer.schwab.com)
 2. **Configure OAuth**: See [docs/SCHWAB_OAUTH_SETUP.md](docs/SCHWAB_OAUTH_SETUP.md) for detailed setup
@@ -36,10 +36,10 @@ The system now supports **Charles Schwab** as a premium data source with OAuth 2
    ```bash
    python scripts/authorize_schwab_host.py
    ```
-4. **Use Schwab data** in wheel CLI:
+4. **Use the wheel CLI**:
    ```bash
-   python -m src.wheel.cli --broker schwab status
-   python -m src.wheel.cli --broker schwab recommend AAPL
+   python -m src.wheel.cli status
+   python -m src.wheel.cli recommend AAPL
    ```
 
 For complete setup instructions including SSL certificates, port forwarding, and container architecture, see the [Schwab OAuth Setup Guide](docs/SCHWAB_OAUTH_SETUP.md).
@@ -52,23 +52,35 @@ For complete setup instructions including SSL certificates, port forwarding, and
 pip install -r requirements.txt
 ```
 
-### 2. Set API Keys
+### 2. Set Up Schwab OAuth (Required)
+
+Follow the [Schwab OAuth Setup Guide](docs/SCHWAB_OAUTH_SETUP.md) to:
+- Register your app at developer.schwab.com
+- Configure OAuth credentials
+- Run authorization flow
+
+### 3. Optional: Set Finnhub API Key (for Earnings Calendar)
 
 ```bash
 export FINNHUB_API_KEY="your_finnhub_key"
-export ALPHA_VANTAGE_API_KEY="your_alpha_vantage_key"
 ```
 
 Or create a `.env` file:
 ```
 FINNHUB_API_KEY=your_finnhub_key
-ALPHA_VANTAGE_API_KEY=your_alpha_vantage_key
 ```
 
-### 3. Run Example
+### 4. Run Wheel Strategy CLI
 
 ```bash
-python example_end_to_end.py
+# Initialize a new wheel position
+python -m src.wheel.cli init AAPL --capital 15000
+
+# Get recommendations
+python -m src.wheel.cli recommend AAPL
+
+# View status
+python -m src.wheel.cli status AAPL
 ```
 
 ## Sample Programs
@@ -165,20 +177,16 @@ python wheel_strategy_tool.py recommend AAPL
 python wheel_strategy_tool.py recommend --all
 
 # Record a sold put option
-python wheel_strategy_tool.py record AAPL \
-  --action sell \
-  --option-type put \
+python wheel_strategy_tool.py record AAPL put \
   --strike 150 \
-  --expiry 2026-02-21 \
+  --expiration 2026-02-21 \
   --premium 2.50 \
   --contracts 1
 
 # Record a sold covered call
-python wheel_strategy_tool.py record NVDA \
-  --action sell \
-  --option-type call \
+python wheel_strategy_tool.py record NVDA call \
   --strike 200 \
-  --expiry 2026-02-21 \
+  --expiration 2026-02-21 \
   --premium 3.75 \
   --contracts 2
 

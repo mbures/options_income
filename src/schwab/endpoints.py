@@ -15,6 +15,7 @@ MARKETDATA_OPTION_EXPIRATION = "/marketdata/v1/expirationchain"
 MARKETDATA_MOVERS = "/marketdata/v1/movers/{symbol}"
 MARKETDATA_MARKET_HOURS = "/marketdata/v1/markets"
 MARKETDATA_INSTRUMENTS = "/marketdata/v1/instruments"
+MARKETDATA_PRICE_HISTORY = "/marketdata/v1/pricehistory"
 
 # Account & Trading Endpoints
 ACCOUNTS = "/trader/v1/accounts"

@@ -2,38 +2,30 @@
 Price data fetcher with caching layer.
 
 This module provides high-level price data fetchers with in-memory caching.
-It wraps the low-level API clients (FinnhubClient, AlphaVantageClient) to
-provide a consistent interface with caching capabilities.
 
 Data Providers:
-1. **Finnhub API** (via FinnhubClient)
+1. **Schwab API** (via SchwabClient) - PRIMARY
+   - Uses /marketdata/v1/pricehistory endpoint
+   - Returns OHLC data with volume
+   - Requires Schwab OAuth authentication
+   - Rate limit: 120 requests/minute
+
+2. **Finnhub API** (via FinnhubClient) - LEGACY
    - Uses /stock/candle endpoint
    - IMPORTANT: Requires paid Finnhub subscription for price data
    - Free tier will return 403 Forbidden error
-
-2. **Alpha Vantage API** (via AlphaVantageClient)
-   - Uses TIME_SERIES_DAILY endpoint (free tier)
-   - Returns OHLC data with volume
-   - Free tier limits: 25 requests/day, max 100 data points per request
+   - Deprecated - will be removed in future version
 
 Usage:
-    # Option 1: Finnhub (requires premium API key)
-    from src.finnhub_client import FinnhubClient
-    from src.price_fetcher import PriceDataFetcher
+    # Schwab (recommended)
+    from src.schwab.client import SchwabClient
+    from src.price_fetcher import SchwabPriceDataFetcher
 
-    client = FinnhubClient(config)
-    fetcher = PriceDataFetcher(client)
+    schwab = SchwabClient(oauth_coordinator)
+    fetcher = SchwabPriceDataFetcher(schwab)
     price_data = fetcher.fetch_price_data("AAPL", lookback_days=60)
 
-    # Option 2: Alpha Vantage (free tier, recommended)
-    from src.alphavantage_client import AlphaVantageClient
-    from src.price_fetcher import AlphaVantagePriceDataFetcher
-
-    client = AlphaVantageClient(config, file_cache=file_cache)
-    fetcher = AlphaVantagePriceDataFetcher(client)
-    price_data = fetcher.fetch_price_data("AAPL", lookback_days=60)
-
-Both fetchers return PriceData objects compatible with the volatility calculator.
+All fetchers return PriceData objects compatible with the volatility calculator.
 """
 
 import logging
@@ -41,9 +33,6 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
-from .alphavantage_client import (
-    AlphaVantageClient,
-)
 from .finnhub_client import FinnhubClient
 from .volatility import PriceData
 
@@ -246,82 +235,57 @@ class PriceDataFetcher:
 
 
 # =============================================================================
-# Alpha Vantage Price Data Fetcher (with caching)
+# Schwab Price Data Fetcher (with caching)
 # =============================================================================
 
 
-class AlphaVantagePriceDataFetcher:
+class SchwabPriceDataFetcher:
     """
-    Fetcher for historical price data from Alpha Vantage API with caching.
+    Fetcher for historical price data from Schwab API with caching.
 
-    Wraps AlphaVantageClient to add in-memory caching capabilities.
-
-    Free tier limits:
-    - 25 requests/day
-    - Max 100 data points per request (outputsize=compact)
+    Wraps SchwabClient to add in-memory caching capabilities.
+    This is the recommended price fetcher - Schwab is the primary data provider.
     """
-
-    # Expose class constants for convenience
-    DAILY_LIMIT = AlphaVantageClient.DAILY_LIMIT
-    MAX_LOOKBACK_DAYS = AlphaVantageClient.MAX_LOOKBACK_DAYS
 
     def __init__(
         self,
-        config_or_client,
+        schwab_client,
         cache: Optional[PriceDataCache] = None,
         enable_cache: bool = True,
-        file_cache: Optional["LocalFileCache"] = None,
     ):
         """
-        Initialize Alpha Vantage price data fetcher.
+        Initialize Schwab price data fetcher.
 
         Args:
-            config_or_client: Either an AlphaVantageConfig or AlphaVantageClient instance
+            schwab_client: SchwabClient instance for API calls
             cache: Optional in-memory cache instance (creates new if None)
             enable_cache: Whether to use caching (default: True)
-            file_cache: Optional LocalFileCache for persistent storage (used if config passed)
         """
-        # Support both old API (config) and new API (client)
-        if isinstance(config_or_client, AlphaVantageClient):
-            self._client = config_or_client
-        else:
-            # Assume it's a config, create client
-            self._client = AlphaVantageClient(config_or_client, file_cache=file_cache)
-
+        self._client = schwab_client
         self.enable_cache = enable_cache
         self.cache = cache if cache is not None else PriceDataCache()
         logger.debug(
-            f"AlphaVantagePriceDataFetcher initialized "
+            f"SchwabPriceDataFetcher initialized "
             f"(caching={'enabled' if enable_cache else 'disabled'})"
         )
-
-    @property
-    def config(self):
-        """Access the underlying client's config."""
-        return self._client.config
 
     def fetch_price_data(
         self, symbol: str, lookback_days: int = 60, resolution: str = "D"
     ) -> PriceData:
         """
-        Fetch historical price data for a symbol from Alpha Vantage.
-
-        Uses TIME_SERIES_DAILY to get OHLC + volume (free tier).
+        Fetch historical price data for a symbol from Schwab.
 
         Args:
-            symbol: Stock ticker symbol (e.g., "F", "AAPL")
+            symbol: Stock ticker symbol (e.g., "AAPL")
             lookback_days: Number of days of historical data (default: 60)
-            resolution: Data resolution (only "D" for daily supported)
+            resolution: Data resolution ("D" for daily - only daily supported)
 
         Returns:
-            PriceData with OHLC data and volumes.
-            Note: adjusted_closes, dividends, split_coefficients will be None
-            (require premium TIME_SERIES_DAILY_ADJUSTED endpoint)
+            PriceData with OHLCV data
 
         Raises:
-            ValueError: If response is invalid or empty
-            AlphaVantageRateLimitError: If daily rate limit exceeded
-            AlphaVantageAPIError: If API call fails
+            SchwabAPIError: If API call fails
+            SchwabAuthenticationError: If not authenticated
         """
         symbol = symbol.upper()
 
@@ -332,14 +296,62 @@ class AlphaVantagePriceDataFetcher:
                 logger.info(f"Using in-memory cached price data for {symbol}")
                 return cached_data
 
-        # Fetch from Alpha Vantage client
-        price_data = self._client.fetch_daily_prices(symbol, lookback_days)
+        # Convert lookback_days to Schwab API parameters
+        period_type, period = self._lookback_to_schwab_params(lookback_days)
+
+        # Fetch from Schwab client
+        price_data = self._client.get_price_history(
+            symbol=symbol,
+            period_type=period_type,
+            period=period,
+            frequency_type="daily",
+            frequency=1,
+        )
 
         # Cache in memory
         if self.enable_cache:
             self.cache.set(symbol, lookback_days, price_data)
 
         return price_data
+
+    def _lookback_to_schwab_params(self, lookback_days: int) -> tuple[str, int]:
+        """
+        Convert lookback_days to Schwab period_type and period.
+
+        Schwab API period options:
+        - day: 1, 2, 3, 4, 5, 10 (frequencyType must be "minute")
+        - month: 1, 2, 3, 6 (frequencyType can be "daily" or "weekly")
+        - year: 1, 2, 3, 5, 10, 15, 20 (frequencyType can be "daily", "weekly", "monthly")
+        - ytd: 1
+
+        Since we need daily OHLC data, we avoid periodType="day" (which only supports minute data).
+
+        Args:
+            lookback_days: Number of days of data requested
+
+        Returns:
+            Tuple of (period_type, period)
+        """
+        # Always use month/year periods to get daily data
+        # periodType="day" only supports minute frequency, so we avoid it
+        if lookback_days <= 30:
+            return ("month", 1)
+        elif lookback_days <= 60:
+            return ("month", 2)
+        elif lookback_days <= 90:
+            return ("month", 3)
+        elif lookback_days <= 180:
+            return ("month", 6)
+        elif lookback_days <= 365:
+            return ("year", 1)
+        elif lookback_days <= 730:
+            return ("year", 2)
+        elif lookback_days <= 1095:
+            return ("year", 3)
+        elif lookback_days <= 1825:
+            return ("year", 5)
+        else:
+            return ("year", 10)
 
     def fetch_multiple_windows(
         self, symbol: str, windows: Optional[list] = None
@@ -368,30 +380,14 @@ class AlphaVantagePriceDataFetcher:
         return results
 
     def clear_cache(self, symbol: Optional[str] = None) -> None:
-        """Clear cached price data."""
+        """
+        Clear cached price data.
+
+        Args:
+            symbol: If provided, only clear data for this symbol.
+                   If None, clear all cached data.
+        """
         if symbol:
             self.cache.clear_symbol(symbol.upper())
         else:
             self.cache.clear()
-
-    def get_usage_status(self) -> dict[str, Any]:
-        """
-        Get current Alpha Vantage API usage status.
-
-        Returns:
-            Dictionary with usage information
-        """
-        return self._client.get_usage_status()
-
-    def close(self) -> None:
-        """Close the underlying client's HTTP session."""
-        self._client.close()
-        logger.debug("AlphaVantagePriceDataFetcher session closed")
-
-    def __enter__(self) -> "AlphaVantagePriceDataFetcher":
-        """Context manager entry."""
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Context manager exit - ensures cleanup."""
-        self.close()

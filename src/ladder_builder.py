@@ -325,13 +325,8 @@ class LadderBuilder:
         Returns:
             Best matching OptionContract, or None if none found
         """
-        # Calculate DTE
-        try:
-            exp_date = date.fromisoformat(expiration_date)
-            today = date.today()
-            days_to_expiry = max(1, (exp_date - today).days)
-        except ValueError:
-            days_to_expiry = 7
+        # Calculate DTE using centralized utility
+        days_to_expiry = calculate_days_to_expiry(expiration_date, default=7)
 
         # Calculate target strike using sigma
         target_strike = self.optimizer.calculate_strike_at_sigma(
@@ -524,7 +519,7 @@ class LadderBuilder:
             leg.mid_price = (leg.bid + leg.ask) / 2
             leg.gross_premium = leg.bid * 100 * contracts
 
-            # Calculate delta and P(ITM)
+            # Calculate delta and P(ITM) from Black-Scholes model
             prob_result = self.optimizer.calculate_assignment_probability(
                 strike=contract.strike,
                 current_price=current_price,
@@ -534,6 +529,12 @@ class LadderBuilder:
             )
             leg.delta = abs(prob_result.delta)
             leg.p_itm = prob_result.probability
+
+            # Get chain-provided delta (if available)
+            if contract.delta is not None:
+                leg.delta_chain = abs(contract.delta)
+                # P(ITM) approximation from chain delta: |delta| for calls/puts
+                leg.p_itm_from_delta = leg.delta_chain
 
             # Check for warnings
             if leg.bid == 0:

@@ -21,9 +21,9 @@ from urllib.parse import urljoin
 
 import requests
 
-from src.cache.local_file_cache import LocalFileCache
 from src.models.base import OptionContract, OptionsChain
 from src.oauth.coordinator import OAuthCoordinator
+from src.volatility_models import PriceData
 from src.oauth.exceptions import TokenNotAvailableError
 
 from . import endpoints
@@ -71,7 +71,6 @@ class SchwabClient:
         max_retries: int = 3,
         retry_delay: float = 1.0,
         enable_cache: bool = True,
-        cache: Optional[LocalFileCache] = None,
     ):
         """
         Initialize Schwab API client.
@@ -81,15 +80,15 @@ class SchwabClient:
                               (creates default if not provided)
             max_retries: Maximum number of retries for transient errors
             retry_delay: Base delay between retries in seconds (exponential backoff)
-            enable_cache: Whether to enable response caching
-            cache: Cache instance (creates default if not provided)
+            enable_cache: Whether to enable in-memory response caching
         """
         self.oauth = oauth_coordinator or OAuthCoordinator()
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.session = requests.Session()
         self.enable_cache = enable_cache
-        self.cache = cache or (LocalFileCache() if enable_cache else None)
+        # Use simple dict for in-memory caching with timestamps
+        self.cache: Dict[str, tuple[Any, float]] = {} if enable_cache else {}
 
         logger.info("SchwabClient initialized")
 
@@ -98,19 +97,17 @@ class SchwabClient:
         Construct full API URL from endpoint path.
 
         Args:
-            endpoint: API endpoint path (e.g., "/marketdata/quotes")
+            endpoint: API endpoint path (e.g., "/marketdata/v1/quotes")
 
         Returns:
-            Full URL with base URL and version prefix
+            Full URL with base URL (endpoints already include version)
         """
         # Ensure endpoint starts with /
         if not endpoint.startswith("/"):
             endpoint = f"/{endpoint}"
 
-        # Add version prefix if not already present
-        if not endpoint.startswith(self.API_VERSION):
-            endpoint = f"{self.API_VERSION}{endpoint}"
-
+        # Endpoints already include version in path (e.g., /marketdata/v1/quotes)
+        # Just join with base URL
         return urljoin(self.BASE_URL, endpoint)
 
     def _request(
@@ -159,12 +156,11 @@ class SchwabClient:
             ) from e
 
         # Add other headers
-        headers.update(
-            {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            }
-        )
+        headers.update({"Accept": "application/json"})
+
+        # Only add Content-Type for requests with a body
+        if method in ["POST", "PUT", "PATCH"] or json_data is not None:
+            headers["Content-Type"] = "application/json"
 
         # Construct full URL
         url = self._get_full_url(endpoint)
@@ -336,13 +332,15 @@ class SchwabClient:
             quote = client.get_quote("AAPL")
             print(f"Last price: ${quote['lastPrice']}")
         """
-        # Check cache first
-        if use_cache and self.cache:
+        # Check cache first (5-minute TTL for quotes)
+        if use_cache and self.enable_cache:
             cache_key = f"schwab_quote_{symbol}"
-            cached = self.cache.get(cache_key)
-            if cached:
-                logger.debug(f"Using cached quote for {symbol}")
-                return cached
+            if cache_key in self.cache:
+                cached_data, cached_time = self.cache[cache_key]
+                age_seconds = time.time() - cached_time
+                if age_seconds < 300:  # 5 minutes
+                    logger.debug(f"Using cached quote for {symbol} (age: {age_seconds:.1f}s)")
+                    return cached_data
 
         # Fetch from API
         logger.info(f"Fetching quote for {symbol}")
@@ -358,8 +356,8 @@ class SchwabClient:
                 raise SchwabInvalidSymbolError(f"Symbol {symbol} not found in response")
 
             # Cache the result (5 minute TTL for quotes)
-            if self.cache:
-                self.cache.set(f"schwab_quote_{symbol}", quote_data, ttl_seconds=300)
+            if self.enable_cache:
+                self.cache[f"schwab_quote_{symbol}"] = (quote_data, time.time())
 
             return quote_data
 
@@ -407,12 +405,14 @@ class SchwabClient:
         cache_params = f"{symbol}_{contract_type}_{strike_count}_{from_date}_{to_date}"
         cache_key = f"schwab_chain_{cache_params}"
 
-        # Check cache first
-        if use_cache and self.cache:
-            cached = self.cache.get(cache_key)
-            if cached:
-                logger.debug(f"Using cached options chain for {symbol}")
-                return cached
+        # Check cache first (15-minute TTL for options chain)
+        if use_cache and self.enable_cache:
+            if cache_key in self.cache:
+                cached_data, cached_time = self.cache[cache_key]
+                age_seconds = time.time() - cached_time
+                if age_seconds < 900:  # 15 minutes
+                    logger.debug(f"Using cached options chain for {symbol} (age: {age_seconds:.1f}s)")
+                    return cached_data
 
         # Build request parameters
         params: Dict[str, Any] = {
@@ -439,8 +439,8 @@ class SchwabClient:
             options_chain = self._parse_schwab_option_chain(symbol, response_data)
 
             # Cache the result (15 minute TTL for options chains)
-            if self.cache:
-                self.cache.set(cache_key, options_chain, ttl_seconds=900)
+            if self.enable_cache:
+                self.cache[cache_key] = (options_chain, time.time())
 
             return options_chain
 
@@ -684,4 +684,163 @@ class SchwabClient:
             total_cash=data.get("totalCash", 0.0),
             account_value=data.get("liquidationValue", 0.0),
             buying_power=data.get("buyingPower"),
+        )
+
+    def get_price_history(
+        self,
+        symbol: str,
+        period_type: str = "month",
+        period: int = 3,
+        frequency_type: str = "daily",
+        frequency: int = 1,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        use_cache: bool = True,
+    ) -> PriceData:
+        """
+        Get historical price data for a symbol.
+
+        Args:
+            symbol: Stock symbol (e.g., "AAPL")
+            period_type: Type of period ("day", "month", "year", "ytd")
+            period: Number of periods (depends on period_type)
+            frequency_type: Type of frequency ("minute", "daily", "weekly", "monthly")
+            frequency: Frequency interval (1 for daily)
+            start_date: Optional start date (overrides period if provided)
+            end_date: Optional end date (defaults to now)
+            use_cache: Whether to use cached data if available (default: True)
+
+        Returns:
+            PriceData object with OHLCV data
+
+        Raises:
+            SchwabAuthenticationError: If authentication fails
+            SchwabInvalidSymbolError: If symbol not found
+            SchwabAPIError: For other API errors
+
+        Example:
+            price_data = client.get_price_history("AAPL", period_type="month", period=3)
+            print(f"Got {len(price_data.closes)} days of price data")
+        """
+        symbol = symbol.upper()
+
+        # Build cache key
+        cache_params = (
+            f"{symbol}_{period_type}_{period}_{frequency_type}_{frequency}_"
+            f"{start_date}_{end_date}"
+        )
+        cache_key = f"schwab_price_history_{cache_params}"
+
+        # Check cache first (24-hour TTL for price history)
+        if use_cache and self.enable_cache:
+            if cache_key in self.cache:
+                cached_data, cached_time = self.cache[cache_key]
+                age_seconds = time.time() - cached_time
+                if age_seconds < 86400:  # 24 hours
+                    logger.debug(f"Using cached price history for {symbol} (age: {age_seconds:.1f}s)")
+                    return cached_data
+
+        # Build request parameters
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "periodType": period_type,
+            "period": period,
+            "frequencyType": frequency_type,
+            "frequency": frequency,
+        }
+
+        # Add date parameters if provided
+        if start_date:
+            # Schwab expects milliseconds since epoch
+            params["startDate"] = int(start_date.timestamp() * 1000)
+        if end_date:
+            params["endDate"] = int(end_date.timestamp() * 1000)
+
+        # Fetch from API
+        logger.info(f"Fetching price history for {symbol}")
+        logger.debug(f"Price history params: {params}")
+        logger.debug(f"Price history endpoint: {endpoints.MARKETDATA_PRICE_HISTORY}")
+
+        try:
+            response_data = self.get(endpoints.MARKETDATA_PRICE_HISTORY, params=params)
+
+            # Parse Schwab response to PriceData
+            price_data = self._parse_schwab_price_history(symbol, response_data)
+
+            # Cache the result (24-hour TTL for price history, matching AlphaVantage)
+            if self.enable_cache:
+                self.cache[cache_key] = (price_data, time.time())
+
+            return price_data
+
+        except SchwabInvalidSymbolError:
+            raise
+        except SchwabAPIError as e:
+            logger.error(f"Failed to fetch price history for {symbol}: {e}")
+            raise
+
+    def _parse_schwab_price_history(
+        self, symbol: str, data: Dict[str, Any]
+    ) -> PriceData:
+        """
+        Parse Schwab price history response to PriceData model.
+
+        Schwab returns candles in format:
+        {
+            "candles": [
+                {
+                    "open": 150.0,
+                    "high": 152.5,
+                    "low": 149.0,
+                    "close": 151.0,
+                    "volume": 1000000,
+                    "datetime": 1704067200000  # milliseconds since epoch
+                },
+                ...
+            ],
+            "symbol": "AAPL",
+            "empty": false
+        }
+
+        Args:
+            symbol: Stock symbol
+            data: Raw Schwab API response
+
+        Returns:
+            PriceData object with parsed OHLCV data
+        """
+        candles = data.get("candles", [])
+
+        if not candles:
+            raise SchwabAPIError(f"No price data returned for {symbol}")
+
+        # Parse candles into lists
+        dates: List[str] = []
+        opens: List[float] = []
+        highs: List[float] = []
+        lows: List[float] = []
+        closes: List[float] = []
+        volumes: List[int] = []
+
+        for candle in candles:
+            # Convert milliseconds timestamp to date string
+            timestamp_ms = candle.get("datetime", 0)
+            dt = datetime.fromtimestamp(timestamp_ms / 1000)
+            dates.append(dt.strftime("%Y-%m-%d"))
+
+            opens.append(float(candle.get("open", 0.0)))
+            highs.append(float(candle.get("high", 0.0)))
+            lows.append(float(candle.get("low", 0.0)))
+            closes.append(float(candle.get("close", 0.0)))
+            volumes.append(int(candle.get("volume", 0)))
+
+        logger.debug(f"Parsed {len(candles)} candles for {symbol}")
+
+        return PriceData(
+            dates=dates,
+            opens=opens,
+            highs=highs,
+            lows=lows,
+            closes=closes,
+            volumes=volumes,
         )

@@ -387,7 +387,8 @@ class OverlayScanner:
         # Yield-based filter: net_credit / notional >= min_weekly_yield_bps
         if current_price > 0:
             notional_per_contract = current_price * 100
-            net_credit_per_contract = candidate.cost_estimate.net_credit
+            # Use net_credit_per_share * 100 to get true per-contract credit
+            net_credit_per_contract = candidate.cost_estimate.net_credit_per_share * 100
             actual_yield_bps = (net_credit_per_contract / notional_per_contract) * 10000
 
             if actual_yield_bps < self.config.min_weekly_yield_bps:
@@ -711,14 +712,23 @@ class OverlayScanner:
                 spread_absolute = ask - bid
                 spread_relative_pct = (spread_absolute / mid_price * 100) if mid_price > 0 else 100
 
-                # Compute delta using Black-Scholes
-                delta, p_itm = self.compute_delta(
+                # Compute delta using Black-Scholes model
+                delta_model, p_itm_model = self.compute_delta(
                     strike=contract.strike,
                     current_price=current_price,
                     volatility=volatility,
                     days_to_expiry=days_to_expiry,
                     option_type="call",
                 )
+
+                # Get chain-provided delta (if available)
+                delta_chain = abs(contract.delta) if contract.delta is not None else None
+                # P(ITM) approximation from chain delta: |delta| for calls
+                p_itm_from_delta = delta_chain if delta_chain is not None else None
+
+                # Primary delta and p_itm use model values (consistent across all strikes)
+                delta = delta_model
+                p_itm = p_itm_model
 
                 # Compute sigma distance for diagnostic
                 try:
@@ -766,9 +776,16 @@ class OverlayScanner:
                     cost_estimate=cost_estimate,
                     delta_band=delta_band,
                     contracts_to_sell=contracts_available,
-                    total_net_credit=cost_estimate.net_credit * contracts_available,
+                    # Note: cost_estimate.net_credit already includes all contracts
+                    # (calculated at line 739 with contracts=contracts_available)
+                    total_net_credit=cost_estimate.net_credit,
                     annualized_yield_pct=annualized_yield,
                     days_to_expiry=days_to_expiry,
+                    # Explicit P(ITM) fields: model vs chain
+                    delta_model=delta_model,
+                    p_itm_model=p_itm_model,
+                    delta_chain=delta_chain,
+                    p_itm_from_delta=p_itm_from_delta,
                 )
 
                 # Apply tradability filters (returns tuple of reasons and details)
