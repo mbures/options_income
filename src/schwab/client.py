@@ -17,10 +17,15 @@ import logging
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from urllib.parse import urljoin
 
 import requests
 
+from src.api.base_client import BaseAPIClient
+from src.constants import (
+    CACHE_TTL_QUOTE_SECONDS,
+    CACHE_TTL_OPTIONS_CHAIN_SECONDS,
+    CACHE_TTL_PRICE_HISTORY_SECONDS,
+)
 from src.models.base import OptionContract, OptionsChain
 from src.oauth.coordinator import OAuthCoordinator
 from src.volatility_models import PriceData
@@ -46,12 +51,18 @@ from .parsers import (
 logger = logging.getLogger(__name__)
 
 
-class SchwabClient:
+class SchwabClient(BaseAPIClient):
     """
     Authenticated HTTP client for Schwab APIs.
 
-    This client handles OAuth authentication, automatic token refresh,
-    and error handling for all Schwab API calls.
+    This client inherits from BaseAPIClient and adds Schwab-specific
+    functionality including OAuth authentication, caching, and
+    Schwab API-specific error handling.
+
+    Inherited features from BaseAPIClient:
+    - HTTP requests with connection pooling
+    - Retry logic with exponential backoff
+    - Error handling and logging
 
     Example:
         from src.oauth.coordinator import OAuthCoordinator
@@ -90,33 +101,73 @@ class SchwabClient:
             retry_delay: Base delay between retries in seconds (exponential backoff)
             enable_cache: Whether to enable in-memory response caching
         """
+        # Initialize base client
+        super().__init__(max_retries=max_retries, retry_delay=retry_delay, timeout=30)
+
         self.oauth = oauth_coordinator or OAuthCoordinator()
-        self.max_retries = max_retries
-        self.retry_delay = retry_delay
-        self.session = requests.Session()
         self.enable_cache = enable_cache
         # Use simple dict for in-memory caching with timestamps
         self.cache: Dict[str, tuple[Any, float]] = {} if enable_cache else {}
 
         logger.info("SchwabClient initialized")
 
-    def _get_full_url(self, endpoint: str) -> str:
+    def _get_auth_headers(self) -> Dict[str, str]:
         """
-        Construct full API URL from endpoint path.
-
-        Args:
-            endpoint: API endpoint path (e.g., "/marketdata/v1/quotes")
+        Get OAuth authorization headers for Schwab API requests.
 
         Returns:
-            Full URL with base URL (endpoints already include version)
-        """
-        # Ensure endpoint starts with /
-        if not endpoint.startswith("/"):
-            endpoint = f"/{endpoint}"
+            Dictionary with Authorization header
 
-        # Endpoints already include version in path (e.g., /marketdata/v1/quotes)
-        # Just join with base URL
-        return urljoin(self.BASE_URL, endpoint)
+        Raises:
+            SchwabAuthenticationError: If OAuth tokens not available
+        """
+        try:
+            return self.oauth.get_authorization_header()
+        except TokenNotAvailableError as e:
+            logger.error(f"Not authorized: {e}")
+            raise SchwabAuthenticationError(
+                "No valid OAuth tokens available. "
+                "Run authorization script on HOST: python scripts/authorize_schwab_host.py"
+            ) from e
+
+    def _handle_error_response(self, response: requests.Response) -> None:
+        """
+        Handle Schwab-specific error responses.
+
+        Args:
+            response: HTTP response with error status code
+
+        Raises:
+            SchwabAuthenticationError: For 401 errors
+            SchwabRateLimitError: For 429 errors
+            SchwabInvalidSymbolError: For 404 errors
+            SchwabAPIError: For other errors
+        """
+        if response.status_code == 401:
+            logger.error(f"Authentication failed (401): {response.text}")
+            raise SchwabAuthenticationError(
+                "Authentication failed. OAuth token may be expired or revoked. "
+                "Re-authorize on HOST: python scripts/authorize_schwab_host.py --revoke && "
+                "python scripts/authorize_schwab_host.py"
+            )
+
+        elif response.status_code == 429:
+            logger.warning("Rate limit exceeded (429)")
+            raise SchwabRateLimitError(
+                "Schwab API rate limit exceeded. Please wait before retrying."
+            )
+
+        elif response.status_code == 404:
+            logger.warning(f"Resource not found (404): {response.url}")
+            raise SchwabInvalidSymbolError(
+                f"Resource not found. Check symbol or endpoint"
+            )
+
+        elif not response.ok:
+            logger.error(f"API error ({response.status_code}): {response.text}")
+            raise SchwabAPIError(
+                f"Schwab API error ({response.status_code}): {response.text}"
+            )
 
     def _request(
         self,
@@ -124,24 +175,17 @@ class SchwabClient:
         endpoint: str,
         params: Optional[Dict[str, Any]] = None,
         json_data: Optional[Dict[str, Any]] = None,
-        retry_count: int = 0,
     ) -> requests.Response:
         """
         Make authenticated HTTP request to Schwab API.
 
-        This method handles:
-        - OAuth token retrieval with automatic refresh
-        - Request retry logic with exponential backoff
-        - 401 authentication error handling
-        - 429 rate limit handling
-        - 404 invalid symbol handling
+        This method wraps the base client's request method with OAuth authentication.
 
         Args:
             method: HTTP method (GET, POST, etc.)
             endpoint: API endpoint path
             params: Query parameters
             json_data: JSON request body
-            retry_count: Current retry attempt (for internal use)
 
         Returns:
             Response object
@@ -151,121 +195,27 @@ class SchwabClient:
             SchwabRateLimitError: If rate limit exceeded (429)
             SchwabInvalidSymbolError: If symbol not found (404)
             SchwabAPIError: For other API errors
-            TokenNotAvailableError: If not authorized (need to run auth flow)
         """
-        # Get authorization header with fresh token
-        try:
-            headers = self.oauth.get_authorization_header()
-        except TokenNotAvailableError as e:
-            logger.error(f"Not authorized: {e}")
-            raise SchwabAuthenticationError(
-                "No valid OAuth tokens available. "
-                "Run authorization script on HOST: python scripts/authorize_schwab_host.py"
-            ) from e
+        # Get OAuth authorization headers
+        auth_headers = self._get_auth_headers()
 
-        # Add other headers
-        headers.update({"Accept": "application/json"})
-
-        # Only add Content-Type for requests with a body
-        if method in ["POST", "PUT", "PATCH"] or json_data is not None:
-            headers["Content-Type"] = "application/json"
-
-        # Construct full URL
+        # Get full URL
         url = self._get_full_url(endpoint)
 
-        # Log request (excluding sensitive headers)
-        logger.debug(f"{method} {url}")
-        if params:
-            logger.debug(f"  Params: {params}")
-
         try:
-            # Make request
-            response = self.session.request(
-                method,
-                url,
-                headers=headers,
-                params=params,
-                json=json_data,
-                timeout=30,
+            # Use base client's retry logic
+            response = self._make_request_with_retry(
+                method, url, params=params, json_data=json_data, headers=auth_headers
             )
 
-            # Handle specific status codes
-            if response.status_code == 401:
-                logger.error(f"Authentication failed (401): {response.text}")
-                raise SchwabAuthenticationError(
-                    "Authentication failed. OAuth token may be expired or revoked. "
-                    "Re-authorize on HOST: python scripts/authorize_schwab_host.py --revoke && "
-                    "python scripts/authorize_schwab_host.py"
-                )
+            # Handle Schwab-specific errors
+            self._handle_error_response(response)
 
-            elif response.status_code == 429:
-                logger.warning("Rate limit exceeded (429)")
-                raise SchwabRateLimitError(
-                    "Schwab API rate limit exceeded. Please wait before retrying."
-                )
-
-            elif response.status_code == 404:
-                logger.warning(f"Resource not found (404): {url}")
-                # Could be invalid symbol or endpoint
-                raise SchwabInvalidSymbolError(
-                    f"Resource not found. Check symbol or endpoint: {endpoint}"
-                )
-
-            elif response.status_code >= 500:
-                # Server error - retry with exponential backoff
-                if retry_count < self.max_retries:
-                    delay = self.retry_delay * (2**retry_count)
-                    logger.warning(
-                        f"Server error ({response.status_code}). "
-                        f"Retrying in {delay}s (attempt {retry_count + 1}/{self.max_retries})"
-                    )
-                    time.sleep(delay)
-                    return self._request(
-                        method, endpoint, params, json_data, retry_count + 1
-                    )
-                else:
-                    logger.error(
-                        f"Server error ({response.status_code}) after {self.max_retries} retries"
-                    )
-                    raise SchwabAPIError(
-                        f"Schwab API server error ({response.status_code}): {response.text}"
-                    )
-
-            elif not response.ok:
-                logger.error(f"API error ({response.status_code}): {response.text}")
-                raise SchwabAPIError(
-                    f"Schwab API error ({response.status_code}): {response.text}"
-                )
-
-            # Success
-            logger.debug(f"Response: {response.status_code}")
             return response
 
-        except requests.exceptions.Timeout:
-            if retry_count < self.max_retries:
-                delay = self.retry_delay * (2**retry_count)
-                logger.warning(
-                    f"Request timeout. Retrying in {delay}s "
-                    f"(attempt {retry_count + 1}/{self.max_retries})"
-                )
-                time.sleep(delay)
-                return self._request(method, endpoint, params, json_data, retry_count + 1)
-            else:
-                logger.error(f"Request timeout after {self.max_retries} retries")
-                raise SchwabAPIError("Request to Schwab API timed out")
-
-        except requests.exceptions.RequestException as e:
-            if retry_count < self.max_retries:
-                delay = self.retry_delay * (2**retry_count)
-                logger.warning(
-                    f"Network error: {e}. Retrying in {delay}s "
-                    f"(attempt {retry_count + 1}/{self.max_retries})"
-                )
-                time.sleep(delay)
-                return self._request(method, endpoint, params, json_data, retry_count + 1)
-            else:
-                logger.error(f"Network error after {self.max_retries} retries: {e}")
-                raise SchwabAPIError(f"Network error: {e}") from e
+        except (requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
+            logger.error(f"Request failed: {e}")
+            raise SchwabAPIError(f"Request to Schwab API failed: {e}") from e
 
     def get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -340,13 +290,13 @@ class SchwabClient:
             quote = client.get_quote("AAPL")
             print(f"Last price: ${quote['lastPrice']}")
         """
-        # Check cache first (5-minute TTL for quotes)
+        # Check cache first
         if use_cache and self.enable_cache:
             cache_key = f"schwab_quote_{symbol}"
             if cache_key in self.cache:
                 cached_data, cached_time = self.cache[cache_key]
                 age_seconds = time.time() - cached_time
-                if age_seconds < 300:  # 5 minutes
+                if age_seconds < CACHE_TTL_QUOTE_SECONDS:
                     logger.debug(f"Using cached quote for {symbol} (age: {age_seconds:.1f}s)")
                     return cached_data
 
@@ -427,12 +377,12 @@ class SchwabClient:
         cache_params = f"{symbol}_{contract_type}_{strike_count}_{from_date}_{to_date}"
         cache_key = f"schwab_chain_{cache_params}"
 
-        # Check cache first (15-minute TTL for options chain)
+        # Check cache first
         if use_cache and self.enable_cache:
             if cache_key in self.cache:
                 cached_data, cached_time = self.cache[cache_key]
                 age_seconds = time.time() - cached_time
-                if age_seconds < 900:  # 15 minutes
+                if age_seconds < CACHE_TTL_OPTIONS_CHAIN_SECONDS:
                     logger.debug(f"Using cached options chain for {symbol} (age: {age_seconds:.1f}s)")
                     return cached_data
 
@@ -589,12 +539,12 @@ class SchwabClient:
         )
         cache_key = f"schwab_price_history_{cache_params}"
 
-        # Check cache first (24-hour TTL for price history)
+        # Check cache first
         if use_cache and self.enable_cache:
             if cache_key in self.cache:
                 cached_data, cached_time = self.cache[cache_key]
                 age_seconds = time.time() - cached_time
-                if age_seconds < 86400:  # 24 hours
+                if age_seconds < CACHE_TTL_PRICE_HISTORY_SECONDS:
                     logger.debug(f"Using cached price history for {symbol} (age: {age_seconds:.1f}s)")
                     return cached_data
 

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Dict, Optional, Tuple
 
+from src.constants import CACHE_TTL_POSITION_STATUS_SECONDS
 from src.price_fetcher import SchwabPriceDataFetcher
 from src.schwab.client import SchwabClient
 from src.utils.date_utils import calculate_days_to_expiry, calculate_trading_days
@@ -221,7 +222,7 @@ class PositionMonitor:
         if not force_refresh and symbol in self._cache:
             price, timestamp = self._cache[symbol]
             age = (datetime.now() - timestamp).total_seconds()
-            if age < 300:  # 5 minutes
+            if age < CACHE_TTL_POSITION_STATUS_SECONDS:
                 logger.debug(f"Using cached price for {symbol}: ${price:.2f}")
                 return price
 

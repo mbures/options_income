@@ -146,6 +146,7 @@ class TestSchwabClient:
         """_request fails after max retries on 500."""
         mock_response = mock.Mock()
         mock_response.status_code = 500
+        mock_response.ok = False
         mock_response.text = "Internal server error"
         mock_request.return_value = mock_response
 
@@ -236,6 +237,7 @@ class TestSchwabClient:
         """Retry delay increases exponentially."""
         mock_response = mock.Mock()
         mock_response.status_code = 500
+        mock_response.ok = False
         mock_response.text = "Error"
         mock_request.return_value = mock_response
 

@@ -15,12 +15,12 @@ for most symbols. Free tier will return 403 Forbidden error.
 """
 
 import logging
-import time
 from datetime import datetime, timedelta
 from typing import Any
 
 import requests
 
+from src.api.base_client import BaseAPIClient
 from src.config import FinnhubConfig
 from src.utils import validate_price_data
 from src.analysis.volatility import PriceData
@@ -38,16 +38,20 @@ class FinnhubAPIError(Exception):
     pass
 
 
-class FinnhubClient:
+class FinnhubClient(BaseAPIClient):
     """
     Client for interacting with Finnhub API.
 
-    This client handles:
-    - HTTP requests with proper authentication
+    This client inherits from BaseAPIClient and adds Finnhub-specific
+    functionality including options chain and price data retrieval.
+
+    Inherited features from BaseAPIClient:
+    - HTTP requests with connection pooling
     - Retry logic with exponential backoff
     - Error handling and logging
-    - Connection pooling via requests.Session
     """
+
+    BASE_URL = "https://finnhub.io/api/v1"
 
     def __init__(self, config: FinnhubConfig):
         """
@@ -56,12 +60,17 @@ class FinnhubClient:
         Args:
             config: FinnhubConfig instance with API credentials and settings
         """
-        self.config = config
-        self.session = requests.Session()
-        self.session.headers.update(
-            {"Accept": "application/json", "User-Agent": "FinnhubOptionsClient/1.0"}
+        # Initialize base client with config settings
+        super().__init__(
+            max_retries=config.max_retries,
+            retry_delay=config.retry_delay,
+            timeout=config.timeout,
         )
-        logger.info("Finnhub client initialized")
+        self.config = config
+
+        # Override BASE_URL if config provides one
+        if hasattr(config, 'base_url') and config.base_url:
+            self.BASE_URL = config.base_url
 
     def get_option_chain(self, symbol: str) -> dict[str, Any]:
         """
@@ -86,15 +95,16 @@ class FinnhubClient:
             raise ValueError(f"Symbol must be alphanumeric: {symbol}")
 
         # Construct request
-        url = f"{self.config.base_url}/stock/option-chain"
+        endpoint = "/stock/option-chain"
         params = {"symbol": symbol, "token": self.config.api_key}
 
         logger.info(f"Fetching options chain for {symbol}")
 
         try:
-            response = self._make_request_with_retry(url, params)
+            # Use base client's get method
+            response = self.get(endpoint, params=params)
 
-            # Check HTTP status
+            # Check HTTP status for Finnhub-specific errors
             if response.status_code == 401:
                 raise FinnhubAPIError(
                     "Authentication failed. Check your API key. "
@@ -104,10 +114,6 @@ class FinnhubClient:
                 raise FinnhubAPIError(
                     "Rate limit exceeded. Finnhub free tier allows 60 calls/minute."
                 )
-            elif response.status_code >= 500:
-                raise FinnhubAPIError(
-                    f"Finnhub server error (HTTP {response.status_code}). Try again later."
-                )
 
             response.raise_for_status()
 
@@ -115,62 +121,10 @@ class FinnhubClient:
             logger.info(f"Successfully retrieved data for {symbol}")
             return data
 
-        except requests.exceptions.Timeout as e:
-            raise FinnhubAPIError(
-                f"Request timeout after {self.config.timeout}s for symbol {symbol}"
-            ) from e
-        except requests.exceptions.ConnectionError as e:
-            raise FinnhubAPIError("Connection error. Check your internet connection.") from e
         except requests.exceptions.RequestException as e:
             raise FinnhubAPIError(f"API request failed: {str(e)}") from e
         except ValueError as e:
             raise FinnhubAPIError(f"Invalid JSON response from API: {str(e)}") from e
-
-    def _make_request_with_retry(
-        self, url: str, params: dict[str, str], attempt: int = 1
-    ) -> requests.Response:
-        """
-        Make HTTP request with exponential backoff retry.
-
-        Args:
-            url: Request URL
-            params: Query parameters
-            attempt: Current attempt number (used for recursion)
-
-        Returns:
-            HTTP response object
-
-        Raises:
-            FinnhubAPIError: If all retry attempts fail
-        """
-        try:
-            response = self.session.get(url, params=params, timeout=self.config.timeout)
-            return response
-
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-            if attempt >= self.config.max_retries:
-                logger.error(f"All {self.config.max_retries} retry attempts failed")
-                raise
-
-            # Calculate exponential backoff delay
-            delay = self.config.retry_delay * (2 ** (attempt - 1))
-
-            logger.warning(
-                f"Request failed (attempt {attempt}/{self.config.max_retries}). "
-                f"Retrying in {delay:.1f}s... Error: {str(e)}"
-            )
-
-            time.sleep(delay)
-            return self._make_request_with_retry(url, params, attempt + 1)
-
-    def close(self) -> None:
-        """
-        Close the HTTP session and cleanup resources.
-
-        Should be called when done using the client.
-        """
-        self.session.close()
-        logger.info("Finnhub client closed")
 
     def get_candle_data(
         self, symbol: str, lookback_days: int = 60, resolution: str = "D"
@@ -209,7 +163,7 @@ class FinnhubClient:
         )
 
         # Call candle API
-        url = f"{self.config.base_url}/stock/candle"
+        endpoint = "/stock/candle"
         params = {
             "symbol": symbol,
             "resolution": resolution,
@@ -219,7 +173,8 @@ class FinnhubClient:
         }
 
         try:
-            response = self._make_request_with_retry(url, params)
+            # Use base client's get method
+            response = self.get(endpoint, params=params)
 
             if response.status_code == 403:
                 raise FinnhubAPIError(
@@ -339,13 +294,14 @@ class FinnhubClient:
         """
         symbol = symbol.upper().strip()
 
-        url = f"{self.config.base_url}/calendar/earnings"
+        endpoint = "/calendar/earnings"
         params = {"symbol": symbol, "from": from_date, "to": to_date, "token": self.config.api_key}
 
         logger.info(f"Fetching earnings calendar for {symbol} from {from_date} to {to_date}")
 
         try:
-            response = self._make_request_with_retry(url, params)
+            # Use base client's get method
+            response = self.get(endpoint, params=params)
 
             if response.status_code == 401:
                 raise FinnhubAPIError("Authentication failed. Check your API key.")
@@ -353,8 +309,6 @@ class FinnhubClient:
                 raise FinnhubAPIError(
                     "Rate limit exceeded. Finnhub free tier allows 60 calls/minute."
                 )
-            elif response.status_code >= 500:
-                raise FinnhubAPIError(f"Finnhub server error (HTTP {response.status_code}).")
 
             response.raise_for_status()
             data = response.json()
@@ -371,19 +325,5 @@ class FinnhubClient:
             logger.info(f"Found {len(earnings_dates)} earnings dates for {symbol}")
             return sorted(earnings_dates)
 
-        except requests.exceptions.Timeout as e:
-            raise FinnhubAPIError(
-                f"Request timeout after {self.config.timeout}s for earnings calendar {symbol}"
-            ) from e
-        except requests.exceptions.ConnectionError as e:
-            raise FinnhubAPIError(f"Connection error fetching earnings for {symbol}") from e
         except requests.exceptions.RequestException as e:
             raise FinnhubAPIError(f"Earnings API request failed: {str(e)}") from e
-
-    def __enter__(self) -> "FinnhubClient":
-        """Context manager entry."""
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Context manager exit - ensures cleanup."""
-        self.close()
