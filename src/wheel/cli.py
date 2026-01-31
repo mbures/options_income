@@ -27,7 +27,13 @@ from .exceptions import (
     WheelError,
 )
 from .manager import WheelManager
-from .models import WheelPerformance, WheelPosition, WheelRecommendation
+from .models import (
+    PositionStatus,
+    TradeRecord,
+    WheelPerformance,
+    WheelPosition,
+    WheelRecommendation,
+)
 from .state import TradeOutcome
 
 logger = logging.getLogger(__name__)
@@ -137,6 +143,58 @@ def _print_performance(perf: WheelPerformance, verbose: bool = False) -> None:
             click.echo(f"Current Shares:   {perf.current_shares}")
             if perf.current_cost_basis:
                 click.echo(f"Cost Basis:       ${perf.current_cost_basis:.2f}")
+
+
+def _format_dte(dte_calendar: int, dte_trading: int) -> str:
+    """Format days to expiration with both calendar and trading days."""
+    return f"{dte_calendar} days ({dte_trading} trading)"
+
+
+def _print_status_with_monitoring(
+    wheel: WheelPosition,
+    trade: TradeRecord,
+    status: PositionStatus,
+    verbose: bool = False,
+) -> None:
+    """Print wheel status with live monitoring data."""
+    click.echo()
+    click.secho(f"{'='*70}", bold=True)
+    click.secho(f"  {wheel.symbol} - {wheel.state.value.upper()}", bold=True)
+    click.secho(f"{'='*70}", bold=True)
+
+    # Position basics
+    click.echo(f"\nPosition:")
+    click.echo(f"  Profile: {wheel.profile.value}")
+    click.echo(f"  Capital: ${wheel.capital_allocated:,.2f}")
+    if wheel.shares_held > 0:
+        click.echo(f"  Shares: {wheel.shares_held} @ ${wheel.cost_basis:.2f}")
+
+    # Open trade details
+    click.echo(f"\nOpen {trade.direction.upper()}:")
+    click.echo(f"  Strike: ${trade.strike:.2f}")
+    click.echo(f"  Expiration: {trade.expiration_date}")
+    click.echo(f"  Premium: ${trade.total_premium:.2f} (${trade.premium_per_share:.2f}/share)")
+    click.echo(f"  Contracts: {trade.contracts}")
+
+    # LIVE MONITORING DATA
+    click.echo(
+        f"\nLive Status (as of {status.last_updated.strftime('%Y-%m-%d %H:%M:%S')}):"
+    )
+    click.echo(f"  Current Price: ${status.current_price:.2f}")
+    click.echo(f"  DTE: {_format_dte(status.dte_calendar, status.dte_trading)}")
+    click.echo(f"  Moneyness: {status.moneyness_label}")
+    click.echo(f"  Risk Level: {status.risk_icon} {status.risk_level}")
+
+    if verbose:
+        click.echo(f"\n  {status.risk_description}")
+        click.echo(f"  Price vs Strike: ${status.price_vs_strike:+.2f}")
+
+    # Risk warning for HIGH risk positions
+    if status.risk_level == "HIGH":
+        click.echo()
+        click.secho(f"{'!'*70}", fg="red", bold=True)
+        click.secho(f"  ⚠️  WARNING: Position is ITM - ASSIGNMENT RISK", fg="red", bold=True)
+        click.secho(f"{'!'*70}", fg="red", bold=True)
 
 
 @click.group()
@@ -475,29 +533,57 @@ def close(ctx: click.Context, symbol: str, price: float) -> None:
 @cli.command()
 @click.argument("symbol", required=False)
 @click.option("--all", "all_symbols", is_flag=True, help="All active wheels")
+@click.option("--refresh", is_flag=True, help="Force fresh data from API")
 @click.pass_context
-def status(ctx: click.Context, symbol: Optional[str], all_symbols: bool) -> None:
+def status(
+    ctx: click.Context, symbol: Optional[str], all_symbols: bool, refresh: bool
+) -> None:
     """
-    View current wheel status.
+    View current wheel status with live monitoring data.
 
-    Example: wheel status AAPL
+    Shows real-time data including DTE, moneyness, and risk level for open positions.
+
+    Example: wheel status AAPL --refresh
     """
     manager = _get_manager(ctx)
     verbose = ctx.obj["verbose"]
 
     if all_symbols:
-        wheels = manager.list_wheels()
-        if not wheels:
-            click.echo("No active wheels. Use 'wheel init SYMBOL --capital N' to start.")
-            return
-        for wheel in wheels:
-            _print_status(wheel, verbose)
+        # Get all positions with monitoring data
+        results = manager.get_all_positions_status(force_refresh=refresh)
+
+        if not results:
+            wheels = manager.list_wheels()
+            if not wheels:
+                click.echo("No active wheels. Use 'wheel init SYMBOL --capital N' to start.")
+                return
+            # Show wheels without monitoring data
+            for wheel in wheels:
+                _print_status(wheel, verbose)
+                click.echo()
+        else:
+            for position, trade, mon_status in results:
+                _print_status_with_monitoring(position, trade, mon_status, verbose)
+                click.echo()
+
     elif symbol:
         wheel = manager.get_wheel(symbol.upper())
-        if wheel:
+        if not wheel:
+            _print_error(f"No wheel found for {symbol.upper()}")
+            sys.exit(1)
+
+        # Try to get monitoring status
+        mon_status = manager.get_position_status(symbol.upper(), force_refresh=refresh)
+
+        if mon_status:
+            # Position has open trade - show with monitoring data
+            trade = manager.get_open_trade(symbol.upper())
+            _print_status_with_monitoring(wheel, trade, mon_status, verbose)
+        else:
+            # No open position - show basic status
             _print_status(wheel, verbose)
 
-            # Show open trade if any
+            # Check if there's a closed trade to show
             trade = manager.get_open_trade(symbol.upper())
             if trade:
                 click.echo()
@@ -507,9 +593,6 @@ def status(ctx: click.Context, symbol: Optional[str], all_symbols: bool) -> None
                     f"exp {trade.expiration_date}"
                 )
                 click.echo(f"  Premium: ${trade.total_premium:.2f}")
-        else:
-            _print_error(f"No wheel found for {symbol.upper()}")
-            sys.exit(1)
     else:
         _print_error("Provide SYMBOL or --all")
         sys.exit(1)
@@ -547,34 +630,63 @@ def performance(
 
 
 @cli.command("list")
+@click.option("--refresh", is_flag=True, help="Force fresh data from API")
 @click.pass_context
-def list_wheels(ctx: click.Context) -> None:
+def list_wheels(ctx: click.Context, refresh: bool) -> None:
     """
-    List all wheel positions.
+    List all wheel positions with live monitoring data.
 
-    Example: wheel list
+    Shows DTE, moneyness, and risk for open positions.
+
+    Example: wheel list --refresh
     """
     manager = _get_manager(ctx)
-    wheels = manager.list_wheels()
 
-    if not wheels:
+    # Get all positions
+    all_wheels = manager.list_wheels()
+
+    if not all_wheels:
         click.echo("No active wheels. Use 'wheel init SYMBOL --capital N' to start.")
         return
 
-    # Print header
+    # Get monitoring data for open positions
+    open_positions = manager.get_all_positions_status(force_refresh=refresh)
+    status_map = {pos.symbol: (trade, status) for pos, trade, status in open_positions}
+
+    # Table header
     click.echo()
     click.echo(
-        f"{'Symbol':<8} {'State':<20} {'Capital':>12} {'Shares':>8} {'Profile':<12}"
+        f"{'Symbol':<8} {'State':<20} {'Strike':>8} {'Current':>8} "
+        f"{'DTE':>12} {'Moneyness':>12} {'Risk':>6}"
     )
-    click.echo("-" * 70)
+    click.echo("=" * 85)
 
-    # Print each wheel
-    for w in wheels:
-        click.echo(
-            f"{w.symbol:<8} {w.state.value:<20} "
-            f"${w.capital_allocated:>10,.2f} {w.shares_held:>8} "
-            f"{w.profile.value:<12}"
-        )
+    for wheel in all_wheels:
+        # Basic info
+        row = f"{wheel.symbol:<8} {wheel.state.value:<20}"
+
+        # If has open position, add monitoring data
+        if wheel.symbol in status_map:
+            trade, status = status_map[wheel.symbol]
+            row += f" ${trade.strike:>7.2f} ${status.current_price:>7.2f}"
+            row += f" {status.dte_calendar:>3}d ({status.dte_trading:>2}t)"
+            row += f" {status.moneyness_label:>12}"
+            row += f" {status.risk_icon} {status.risk_level:>3}"
+        else:
+            # No open position
+            row += f" {'---':>8} {'---':>8} {'---':>12} {'---':>12} {'---':>6}"
+
+        click.echo(row)
+
+    # Summary
+    click.echo()
+    click.echo(f"Total wheels: {len(all_wheels)}")
+    click.echo(f"Open positions: {len(open_positions)}")
+
+    high_risk = sum(1 for _, _, s in open_positions if s.risk_level == "HIGH")
+    if high_risk > 0:
+        click.echo()
+        click.secho(f"⚠️  {high_risk} position(s) at HIGH RISK (ITM)", fg="red", bold=True)
 
 
 @cli.command()
@@ -660,6 +772,37 @@ def history(ctx: click.Context, symbol: str) -> None:
             f"${trade.total_premium:7.2f} "
             f"{status_icon}"
         )
+
+
+@cli.command()
+@click.pass_context
+def refresh(ctx: click.Context) -> None:
+    """
+    Refresh all position snapshots and create daily historical records.
+
+    This command:
+    - Fetches fresh quotes for all open positions
+    - Creates daily snapshots for historical tracking
+    - Should be run once per day (typically after market close)
+
+    The snapshots enable tracking position evolution over time. You can
+    schedule this command via cron to run automatically:
+
+        # Daily at 4:15 PM ET (after market close)
+        15 16 * * 1-5 cd /path/to/project && wheel refresh
+
+    Example: wheel refresh
+    """
+    manager = _get_manager(ctx)
+
+    click.echo("Refreshing all open positions...")
+
+    count = manager.refresh_snapshots(force=False)
+
+    if count == 0:
+        click.echo("No new snapshots created (already up-to-date for today)")
+    else:
+        _print_success(f"Created {count} position snapshot(s) for today")
 
 
 def main() -> None:

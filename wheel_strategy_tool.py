@@ -39,6 +39,8 @@ keeping premium without assignment.
 
 from src.wheel import (
     VALID_TRANSITIONS,
+    PositionSnapshot,
+    PositionStatus,
     TradeOutcome,
     TradeRecord,
     WheelPerformance,
@@ -59,6 +61,8 @@ __all__ = [
     "TradeRecord",
     "WheelRecommendation",
     "WheelPerformance",
+    "PositionStatus",
+    "PositionSnapshot",
     # State machine
     "WheelState",
     "TradeOutcome",

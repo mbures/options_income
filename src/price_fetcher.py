@@ -314,6 +314,38 @@ class SchwabPriceDataFetcher:
 
         return price_data
 
+    def get_current_price(self, symbol: str) -> float:
+        """
+        Get current price for a symbol from Schwab.
+
+        Args:
+            symbol: Stock ticker symbol (e.g., "AAPL")
+
+        Returns:
+            Current price (lastPrice or closePrice)
+
+        Raises:
+            SchwabAPIError: If API call fails
+            SchwabAuthenticationError: If not authenticated
+            ValueError: If no price data available in quote
+        """
+        symbol = symbol.upper()
+
+        # Get quote from Schwab (respects its own 5-minute cache)
+        quote = self._client.get_quote(symbol)
+
+        # Try multiple price fields in order of preference
+        price = (
+            quote.get("lastPrice")
+            or quote.get("closePrice")
+            or quote.get("bidPrice")  # Fallback to bid if no last/close
+        )
+
+        if price is None:
+            raise ValueError(f"No price data available in quote for {symbol}")
+
+        return float(price)
+
     def _lookback_to_schwab_params(self, lookback_days: int) -> tuple[str, int]:
         """
         Convert lookback_days to Schwab period_type and period.

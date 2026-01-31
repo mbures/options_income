@@ -344,16 +344,30 @@ class SchwabClient:
 
         # Fetch from API
         logger.info(f"Fetching quote for {symbol}")
-        endpoint = endpoints.MARKETDATA_QUOTE.format(symbol=symbol)
+
+        # Use the quotes endpoint (plural) with symbols query parameter
+        endpoint = endpoints.MARKETDATA_QUOTES
+        params = {"symbols": symbol}
 
         try:
-            response_data = self.get(endpoint)
+            response_data = self.get(endpoint, params=params)
 
-            # Schwab returns quotes in a dictionary keyed by symbol
-            if symbol in response_data:
-                quote_data = response_data[symbol]
-            else:
-                raise SchwabInvalidSymbolError(f"Symbol {symbol} not found in response")
+            # Response format: {symbol: {quote: {...}, extended: {...}, ...}}
+            # Extract the data for our symbol
+            symbol_data = response_data.get(symbol)
+            if not symbol_data:
+                raise SchwabInvalidSymbolError(
+                    f"Symbol {symbol} not found in response"
+                )
+
+            # Extract the quote data from the nested 'quote' dictionary
+            # Schwab response has: {quote: {lastPrice, closePrice, ...}, extended: {...}, ...}
+            quote_data = symbol_data.get("quote", {})
+
+            # Merge in some useful top-level fields for completeness
+            quote_data["symbol"] = symbol_data.get("symbol", symbol)
+            quote_data["quoteType"] = symbol_data.get("quoteType")
+            quote_data["realtime"] = symbol_data.get("realtime")
 
             # Cache the result (5 minute TTL for quotes)
             if self.enable_cache:

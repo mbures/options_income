@@ -24,9 +24,9 @@ The wheel strategy is a systematic approach to selling options:
 ### 1.4 Non-Goals
 
 - Automated order execution (recommendations only)
-- Real-time position monitoring (manual check-ins)
 - Tax lot tracking or wash sale detection
-- Broker API integration
+- Push notifications or alerts
+- Intraday tick-by-tick monitoring
 
 ---
 
@@ -62,6 +62,15 @@ The wheel strategy is a systematic approach to selling options:
 
 **US-9: Adjust Risk Profile**
 > As a trader, I want to change my aggressiveness level mid-cycle so that I can adapt to changing market conditions.
+
+**US-10: Monitor Open Positions**
+> As a trader, I want to see current market data for my open positions (days to expiration, current price vs strike, ITM/OTM status) so that I can assess assignment risk without manual price lookups.
+
+**US-11: Track Position Evolution**
+> As a trader, I want to see how my position moneyness has changed over time so that I can understand price movement patterns and refine my strike selection strategy.
+
+**US-12: Identify High-Risk Positions**
+> As a trader, I want to be alerted when a position moves ITM so that I can decide whether to close it early or prepare for assignment.
 
 ---
 
@@ -169,13 +178,57 @@ Record at expiration:
 
 **FR-16: Live Data**
 - Fetch options chains from Finnhub API
-- Fetch current prices from Alpha Vantage API
-- Use existing codebase clients and caching
+- Fetch current prices from Schwab API with Alpha Vantage fallback
+- Use existing codebase clients and caching (5-minute TTL)
 
 **FR-17: Volatility Calculation**
 - Use existing VolatilityCalculator for sigma calculations
 - Apply blended volatility for strike selection
 - Cache volatility data per session
+
+### 3.7 Position Monitoring
+
+**FR-18: Days to Expiration (DTE) Display**
+- Calculate calendar days remaining until expiration
+- Calculate trading days remaining (exclude weekends and holidays)
+- Display format: "14 days (10 trading days)"
+- Update automatically when viewing position status
+
+**FR-19: Moneyness Calculation**
+- Determine if position is In-The-Money (ITM) or Out-of-The-Money (OTM)
+- For puts: ITM when current price ≤ strike
+- For calls: ITM when current price ≥ strike
+- Calculate percentage distance from strike
+- Display format: "OTM by 2.3%" or "ITM by 1.8%"
+
+**FR-20: Risk Assessment**
+- Assign risk levels based on moneyness:
+  - LOW: OTM by >5% (comfortable safety margin)
+  - MEDIUM: OTM by 0-5% (approaching strike, danger zone)
+  - HIGH: ITM by any amount (assignment/exercise risk present)
+- Display risk level prominently in status views
+- Highlight HIGH risk positions with visual warnings
+
+**FR-21: Position Refresh Timing**
+- On startup: Refresh all open positions once
+- During market hours: Refresh positions every hour automatically
+- After market close: Refresh once at 4:15 PM ET to capture closing prices
+- Manual refresh: Allow user to force fresh data fetch via --refresh flag
+- Respect existing 5-minute cache TTL to minimize API calls
+
+**FR-22: Historical Snapshot Tracking**
+- Create daily snapshots of position status
+- Record: date, price, DTE, moneyness percentage, ITM status, risk level
+- Store snapshots in database for trend analysis
+- Enable comparison of position evolution over time
+- Run snapshot creation after market close (via scheduled command)
+
+**FR-23: Status Display Enhancement**
+- Show live market data for all open positions
+- Include: current price, DTE, moneyness, risk level in status output
+- Provide both summary view (list all) and detailed view (single position)
+- Timestamp all live data displays
+- Highlight positions requiring attention (ITM/high risk)
 
 ---
 
@@ -200,16 +253,21 @@ wheel record SYMBOL put --strike 145 --expiration 2025-02-21 --premium 1.50 --co
 # Record expiration outcome
 wheel expire SYMBOL --price 148.50
 
-# View status
+# View status (with live monitoring data)
 wheel status SYMBOL
 wheel status --all
+wheel status SYMBOL --refresh  # Force fresh data
 
 # View performance
 wheel performance SYMBOL
 wheel performance --all --export csv
 
-# List all wheels
+# List all wheels (with live monitoring data)
 wheel list
+wheel list --refresh  # Force fresh data
+
+# Refresh position snapshots (create daily historical records)
+wheel refresh
 
 # Close/archive a wheel
 wheel close SYMBOL
@@ -250,88 +308,53 @@ api_keys:
 
 ### 5.1 Core Classes
 
-```python
-from wheel_strategy_tool import WheelManager, WheelPosition, TradeRecord
+Module provides WheelManager for all operations:
+- Wheel lifecycle (create, import, list, close)
+- Recommendations (get next option to sell)
+- Trade recording (record sales and expirations)
+- Performance tracking (metrics and analytics)
+- Position monitoring (live status and snapshots)
 
-# Initialize manager
-manager = WheelManager(db_path="trades.db")
-
-# Create new wheel
-wheel = manager.create_wheel(
-    symbol="AAPL",
-    capital=10000,
-    profile=StrikeProfile.CONSERVATIVE,
-    starting_direction="put"  # Optional
-)
-
-# Get recommendation
-rec = manager.get_recommendation(symbol="AAPL")
-print(f"Sell {rec.direction} at ${rec.strike} for ${rec.premium}")
-
-# Record trade
-trade = manager.record_trade(
-    symbol="AAPL",
-    direction="put",
-    strike=145.00,
-    expiration="2025-02-21",
-    premium=1.50,
-    contracts=1
-)
-
-# Record expiration
-outcome = manager.record_expiration(
-    symbol="AAPL",
-    price_at_expiry=148.50
-)
-
-# Get performance
-perf = manager.get_performance(symbol="AAPL")
-print(f"Total premium: ${perf.total_premium}")
-print(f"Win rate: {perf.win_rate_pct}%")
-```
+Key operations:
+- Initialize manager with database path
+- Create wheels with capital and profile
+- Get recommendations based on current state
+- Record trades and expiration outcomes
+- Monitor open positions with live data
+- Get performance metrics
+- Create historical snapshots
 
 ### 5.2 Data Classes
 
-```python
-@dataclass
-class WheelPosition:
-    symbol: str
-    state: WheelState  # IDLE, PUT_OPEN, HOLDING_SHARES, CALL_OPEN
-    capital_allocated: float
-    shares_held: int
-    cost_basis: Optional[float]
-    current_option: Optional[TradeRecord]
-    profile: StrikeProfile
-    created_at: datetime
+**WheelPosition**: Represents a wheel strategy position on a symbol
+- Symbol, state, capital, shares, cost basis, profile
+- Tracks whether position is in CASH or SHARES state
+- Indicates if open position exists (awaiting expiration)
 
-@dataclass
-class TradeRecord:
-    id: int
-    symbol: str
-    direction: str  # "put" or "call"
-    strike: float
-    expiration_date: str
-    premium_per_share: float
-    contracts: int
-    total_premium: float
-    opened_at: datetime
-    closed_at: Optional[datetime]
-    outcome: Optional[TradeOutcome]
-    price_at_expiry: Optional[float]
+**TradeRecord**: Records a single option trade (put or call sold)
+- Symbol, direction, strike, expiration, premium, contracts
+- Open/close timestamps
+- Outcome (open, expired_worthless, assigned, called_away)
+- Price at expiration for assignment determination
 
-@dataclass
-class WheelPerformance:
-    symbol: str
-    total_premium: float
-    total_trades: int
-    winning_trades: int  # Expired worthless
-    win_rate_pct: float
-    puts_assigned: int
-    calls_exercised: int
-    average_days_held: float
-    annualized_yield_pct: float
-    realized_pnl: float
-```
+**WheelPerformance**: Performance metrics for a wheel position
+- Total premium collected, trade counts, win rates
+- Assignment and called-away event counts
+- Average holding period, annualized yield
+- Realized P&L
+
+**PositionStatus**: Live monitoring data for an open position
+- Current price, DTE (calendar and trading days)
+- Moneyness (ITM/OTM status and percentage)
+- Risk level (LOW/MEDIUM/HIGH) with visual indicator
+- Price vs strike comparison
+- Last update timestamp
+
+**PositionSnapshot**: Historical daily snapshot of position status
+- Trade reference, snapshot date
+- Price, DTE, moneyness at snapshot time
+- ITM status and risk level at snapshot time
+- Enables trend analysis over position lifetime
 
 ---
 
@@ -370,15 +393,19 @@ class WheelPerformance:
 | outcome | TEXT | expired_worthless, assigned, called_away, closed_early |
 | price_at_expiry | REAL | Stock price at expiration (nullable) |
 
-**performance_snapshots** (optional, for historical tracking)
+**position_snapshots** (daily position monitoring history)
 | Column | Type | Description |
 |--------|------|-------------|
 | id | INTEGER PK | Auto-increment ID |
-| wheel_id | INTEGER FK | Reference to wheels.id |
+| trade_id | INTEGER FK | Reference to trades.id |
 | snapshot_date | TEXT | YYYY-MM-DD |
-| total_premium | REAL | Cumulative premium |
-| total_trades | INTEGER | Trade count |
-| win_rate_pct | REAL | Win rate at snapshot |
+| current_price | REAL | Stock price at snapshot time |
+| dte_calendar | INTEGER | Calendar days to expiration |
+| dte_trading | INTEGER | Trading days to expiration |
+| moneyness_pct | REAL | Percentage distance from strike |
+| is_itm | INTEGER | 1=ITM, 0=OTM |
+| risk_level | TEXT | LOW, MEDIUM, or HIGH |
+| created_at | TEXT | ISO timestamp |
 
 ---
 
@@ -416,6 +443,23 @@ class WheelPerformance:
 | AC-16 | Trade history immutable | Recorded trades cannot be modified |
 | AC-17 | Database survives restarts | Data persists across sessions |
 | AC-18 | Export produces valid CSV | Exported data importable to spreadsheet |
+
+### 7.4 Position Monitoring
+
+| ID | Criteria | Verification |
+|----|----------|--------------|
+| AC-19 | DTE displays both calendar and trading days | Format: "14 days (10 trading days)" |
+| AC-20 | Moneyness calculated correctly for puts | ITM when price ≤ strike, OTM when price > strike |
+| AC-21 | Moneyness calculated correctly for calls | ITM when price ≥ strike, OTM when price < strike |
+| AC-22 | Risk level HIGH for any ITM position | Any intrinsic value triggers HIGH risk |
+| AC-23 | Risk level MEDIUM for near-money positions | OTM by 0-5% shows MEDIUM risk |
+| AC-24 | Risk level LOW for safe positions | OTM by >5% shows LOW risk |
+| AC-25 | Status command shows live data | Current price, DTE, moneyness, risk displayed |
+| AC-26 | List command shows monitoring for all positions | Table includes DTE and risk columns |
+| AC-27 | Refresh respects cache timing | No API calls if data < 5 minutes old (unless --refresh) |
+| AC-28 | Daily snapshots created | One snapshot per position per day |
+| AC-29 | Snapshots stored with unique constraint | Cannot create duplicate for same trade+date |
+| AC-30 | HIGH risk positions visually highlighted | Warning displayed for ITM positions |
 
 ---
 

@@ -30,28 +30,30 @@ class TestMarketDataEndpoints:
     @pytest.fixture
     def client_with_cache(self, mock_oauth):
         """Create Schwab client with mocked OAuth and cache enabled."""
-        mock_cache = mock.Mock()
-        mock_cache.get.return_value = None  # No cached data by default
         return SchwabClient(
-            oauth_coordinator=mock_oauth, enable_cache=True, cache=mock_cache
+            oauth_coordinator=mock_oauth, enable_cache=True
         )
 
     @pytest.fixture
     def mock_quote_response(self):
-        """Mock Schwab quote response."""
+        """Mock Schwab quote response (actual API structure)."""
         return {
             "AAPL": {
                 "symbol": "AAPL",
-                "lastPrice": 150.25,
-                "openPrice": 149.50,
-                "highPrice": 151.00,
-                "lowPrice": 149.00,
-                "closePrice": 150.00,
-                "bidPrice": 150.20,
-                "askPrice": 150.30,
-                "totalVolume": 50000000,
-                "quoteTime": 1706198400000,
-                "tradeTime": 1706198400000,
+                "quoteType": "NBBO",
+                "realtime": True,
+                "quote": {
+                    "lastPrice": 150.25,
+                    "openPrice": 149.50,
+                    "highPrice": 151.00,
+                    "lowPrice": 149.00,
+                    "closePrice": 150.00,
+                    "bidPrice": 150.20,
+                    "askPrice": 150.30,
+                    "totalVolume": 50000000,
+                    "quoteTime": 1706198400000,
+                    "tradeTime": 1706198400000,
+                }
             }
         }
 
@@ -130,18 +132,25 @@ class TestMarketDataEndpoints:
         with pytest.raises(SchwabInvalidSymbolError, match="not found in response"):
             client.get_quote("INVALID")
 
+    @mock.patch("src.schwab.client.time")
     @mock.patch("src.schwab.client.requests.Session.request")
-    def test_get_quote_uses_cache(self, mock_request, client_with_cache, mock_quote_response):
+    def test_get_quote_uses_cache(self, mock_request, mock_time, client_with_cache, mock_quote_response):
         """get_quote() uses cached data when available."""
-        # Set up cache to return data
-        cached_quote = mock_quote_response["AAPL"]
-        client_with_cache.cache.get.return_value = cached_quote
+        # Set up cache with recent data (within 5-minute TTL)
+        current_time = 1000000.0
+        mock_time.time.return_value = current_time
+
+        cached_quote = mock_quote_response["AAPL"]["quote"].copy()
+        cached_quote["symbol"] = "AAPL"
+        cached_quote["quoteType"] = mock_quote_response["AAPL"]["quoteType"]
+        cached_quote["realtime"] = mock_quote_response["AAPL"]["realtime"]
+
+        client_with_cache.cache["schwab_quote_AAPL"] = (cached_quote, current_time - 60)  # 1 minute old
 
         quote = client_with_cache.get_quote("AAPL", use_cache=True)
 
         # Should use cached data, not make API call
         assert quote == cached_quote
-        client_with_cache.cache.get.assert_called_once_with("schwab_quote_AAPL")
         mock_request.assert_not_called()
 
     @mock.patch("src.schwab.client.requests.Session.request")
@@ -149,8 +158,6 @@ class TestMarketDataEndpoints:
         self, mock_request, client_with_cache, mock_quote_response
     ):
         """get_quote() caches API response."""
-        client_with_cache.cache.get.return_value = None  # No cached data
-
         mock_response = mock.Mock()
         mock_response.status_code = 200
         mock_response.ok = True
@@ -160,11 +167,10 @@ class TestMarketDataEndpoints:
         quote = client_with_cache.get_quote("AAPL", use_cache=True)
 
         # Should cache the result
-        client_with_cache.cache.set.assert_called_once()
-        call_args = client_with_cache.cache.set.call_args
-        assert call_args[0][0] == "schwab_quote_AAPL"
-        assert call_args[0][1] == mock_quote_response["AAPL"]
-        assert call_args[1]["ttl_seconds"] == 300  # 5 minute TTL
+        assert "schwab_quote_AAPL" in client_with_cache.cache
+        cached_quote, cached_time = client_with_cache.cache["schwab_quote_AAPL"]
+        assert cached_quote == quote
+        assert isinstance(cached_time, float)  # Unix timestamp
 
     @mock.patch("src.schwab.client.requests.Session.request")
     def test_get_option_chain_success(
@@ -231,18 +237,25 @@ class TestMarketDataEndpoints:
         assert params["fromDate"] == "2026-02-01"
         assert params["toDate"] == "2026-03-01"
 
+    @mock.patch("src.schwab.client.time")
     @mock.patch("src.schwab.client.requests.Session.request")
     def test_get_option_chain_uses_cache(
-        self, mock_request, client_with_cache, mock_option_chain_response
+        self, mock_request, mock_time, client_with_cache, mock_option_chain_response
     ):
         """get_option_chain() uses cached data when available."""
+        current_time = 1000000.0
+        mock_time.time.return_value = current_time
+
         # Create a mock OptionsChain to return from cache
         cached_chain = OptionsChain(
             symbol="AAPL",
             contracts=[],
             retrieved_at=datetime.now().isoformat(),
         )
-        client_with_cache.cache.get.return_value = cached_chain
+
+        # Add to cache (within 15-minute TTL)
+        cache_key = "schwab_chain_AAPL_None_None_None_None"
+        client_with_cache.cache[cache_key] = (cached_chain, current_time - 300)  # 5 minutes old
 
         chain = client_with_cache.get_option_chain("AAPL", use_cache=True)
 
@@ -255,8 +268,6 @@ class TestMarketDataEndpoints:
         self, mock_request, client_with_cache, mock_option_chain_response
     ):
         """get_option_chain() caches parsed OptionsChain."""
-        client_with_cache.cache.get.return_value = None
-
         mock_response = mock.Mock()
         mock_response.status_code = 200
         mock_response.ok = True
@@ -266,11 +277,11 @@ class TestMarketDataEndpoints:
         chain = client_with_cache.get_option_chain("AAPL", use_cache=True)
 
         # Should cache the result
-        client_with_cache.cache.set.assert_called_once()
-        call_args = client_with_cache.cache.set.call_args
-        assert "schwab_chain_" in call_args[0][0]
-        assert isinstance(call_args[0][1], OptionsChain)
-        assert call_args[1]["ttl_seconds"] == 900  # 15 minute TTL
+        cache_keys = [k for k in client_with_cache.cache.keys() if k.startswith("schwab_chain_")]
+        assert len(cache_keys) == 1
+        cached_chain, cached_time = client_with_cache.cache[cache_keys[0]]
+        assert isinstance(cached_chain, OptionsChain)
+        assert isinstance(cached_time, float)  # Unix timestamp
 
     def test_parse_schwab_contract(self, client):
         """_parse_schwab_contract() correctly parses contract data."""

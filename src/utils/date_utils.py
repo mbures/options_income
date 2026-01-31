@@ -38,3 +38,33 @@ def calculate_days_to_expiry(expiration_date: str, default: int = 30) -> int:
     except (ValueError, TypeError) as e:
         logger.warning(f"Could not parse expiration date '{expiration_date}': {e}")
         return default
+
+
+def calculate_trading_days(start_date: date, end_date: date) -> int:
+    """
+    Calculate trading days (business days) between two dates.
+
+    Counts weekdays only (Monday-Friday), excluding weekends.
+    Does not account for market holidays - this is a simplified calculation
+    suitable for monitoring and display purposes.
+
+    Args:
+        start_date: Starting date
+        end_date: Ending date (inclusive)
+
+    Returns:
+        Number of trading days (minimum 0)
+    """
+    if end_date < start_date:
+        return 0
+
+    trading_days = 0
+    current = start_date
+
+    while current <= end_date:
+        # 0 = Monday, 6 = Sunday
+        if current.weekday() < 5:  # Monday-Friday
+            trading_days += 1
+        current = date.fromordinal(current.toordinal() + 1)
+
+    return trading_days

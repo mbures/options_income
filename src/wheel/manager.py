@@ -26,7 +26,15 @@ from .exceptions import (
     SymbolNotFoundError,
     TradeNotFoundError,
 )
-from .models import TradeRecord, WheelPerformance, WheelPosition, WheelRecommendation
+from .models import (
+    PositionSnapshot,
+    PositionStatus,
+    TradeRecord,
+    WheelPerformance,
+    WheelPosition,
+    WheelRecommendation,
+)
+from .monitor import PositionMonitor
 from .performance import PerformanceTracker
 from .recommend import RecommendEngine
 from .repository import WheelRepository
@@ -69,6 +77,7 @@ class WheelManager:
         self.repository = WheelRepository(db_path)
         self.recommend_engine = RecommendEngine(finnhub_client, price_fetcher, schwab_client)
         self.performance_tracker = PerformanceTracker(self.repository)
+        self.monitor = PositionMonitor(schwab_client, price_fetcher)
         self.schwab = schwab_client
 
     # --- Wheel CRUD Operations ---
@@ -597,3 +606,103 @@ class WheelManager:
         if not wheel:
             return []
         return self.repository.get_trades(wheel_id=wheel.id)
+
+    # --- Position Monitoring ---
+
+    def get_position_status(
+        self,
+        symbol: str,
+        force_refresh: bool = False,
+    ) -> Optional[PositionStatus]:
+        """
+        Get current status for a symbol's open position.
+
+        Args:
+            symbol: Stock ticker symbol
+            force_refresh: Bypass cache and fetch fresh data
+
+        Returns:
+            PositionStatus if position has an open trade, None otherwise
+        """
+        symbol = symbol.upper()
+        position = self.repository.get_wheel(symbol)
+
+        if not position:
+            logger.debug(f"No wheel position found for {symbol}")
+            return None
+
+        if not position.has_monitorable_position:
+            logger.debug(
+                f"Position {symbol} not in monitorable state (state: {position.state.value})"
+            )
+            return None
+
+        trade = self.repository.get_open_trade(position.id)
+        if not trade:
+            logger.warning(
+                f"Position {symbol} in OPEN state but no open trade found"
+            )
+            return None
+
+        return self.monitor.get_position_status(position, trade, force_refresh)
+
+    def get_all_positions_status(
+        self,
+        force_refresh: bool = False,
+    ) -> list[tuple[WheelPosition, TradeRecord, PositionStatus]]:
+        """
+        Get status for all open positions across all wheels.
+
+        Args:
+            force_refresh: Bypass cache and fetch fresh data
+
+        Returns:
+            List of tuples: (WheelPosition, TradeRecord, PositionStatus)
+        """
+        positions = self.repository.list_wheels(active_only=True)
+        all_trades = self.repository.get_trades(outcome=TradeOutcome.OPEN)
+
+        return self.monitor.get_all_positions_status(
+            positions, all_trades, force_refresh
+        )
+
+    def refresh_snapshots(self, force: bool = False) -> int:
+        """
+        Create daily snapshots for all open positions.
+
+        Args:
+            force: Force snapshot creation even if snapshots exist for today
+
+        Returns:
+            Number of snapshots created
+        """
+        from datetime import date
+
+        today = date.today()
+        count = 0
+
+        # Check if snapshots already exist for today (unless force=True)
+        if not force and self.repository.has_snapshots_for_date(today):
+            logger.debug(f"Snapshots already exist for {today}, skipping")
+            return 0
+
+        # Get all open positions with force refresh to ensure fresh data
+        statuses = self.get_all_positions_status(force_refresh=True)
+
+        for position, trade, status in statuses:
+            snapshot = self.monitor.create_snapshot(trade, status, today)
+            try:
+                self.repository.create_snapshot(snapshot)
+                count += 1
+                logger.info(
+                    f"Created snapshot for {position.symbol} "
+                    f"(trade_id={trade.id}, date={today})"
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to create snapshot for {position.symbol}: {e}",
+                    exc_info=True,
+                )
+
+        logger.info(f"Created {count} snapshot(s) for {today}")
+        return count

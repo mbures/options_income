@@ -45,6 +45,11 @@ class WheelPosition:
         return self.state in (WheelState.CASH_PUT_OPEN, WheelState.SHARES_CALL_OPEN)
 
     @property
+    def has_monitorable_position(self) -> bool:
+        """True if in an OPEN state that can be monitored for live data."""
+        return self.has_open_position
+
+    @property
     def contracts_from_shares(self) -> int:
         """Number of covered call contracts available from shares."""
         return self.shares_held // 100
@@ -187,3 +192,70 @@ class WheelPerformance:
             / self.completed_trades
             * 100
         )
+
+
+@dataclass
+class PositionStatus:
+    """
+    Real-time status snapshot for an open position.
+
+    Provides live monitoring data for positions awaiting expiration,
+    including moneyness, risk assessment, and time decay metrics.
+    """
+
+    # Position identification
+    symbol: str
+    direction: str  # "put" or "call"
+    strike: float
+    expiration_date: str  # YYYY-MM-DD
+
+    # Time metrics
+    dte_calendar: int  # Calendar days to expiration
+    dte_trading: int  # Trading days to expiration
+
+    # Price and moneyness
+    current_price: float
+    price_vs_strike: float  # Signed distance from strike
+    is_itm: bool  # In the money (assignment risk)
+    is_otm: bool  # Out of the money (on track)
+    moneyness_pct: float  # Percentage distance from strike
+    moneyness_label: str  # Human-readable (e.g. "OTM by 2.3%")
+
+    # Risk assessment
+    risk_level: str  # "LOW", "MEDIUM", "HIGH"
+    risk_icon: str  # Visual indicator
+
+    # Metadata
+    last_updated: datetime = field(default_factory=datetime.now)
+    premium_collected: float = 0.0
+
+    @property
+    def risk_description(self) -> str:
+        """Human-readable risk description."""
+        if self.risk_level == "LOW":
+            return f"Low risk - {self.moneyness_label}, comfortable margin"
+        elif self.risk_level == "MEDIUM":
+            return f"Medium risk - {self.moneyness_label}, approaching strike"
+        else:  # HIGH
+            return f"HIGH RISK - {self.moneyness_label}, ASSIGNMENT LIKELY"
+
+
+@dataclass
+class PositionSnapshot:
+    """
+    Daily historical snapshot of position status.
+
+    Enables tracking position evolution over time and identifying
+    patterns in price movement relative to strikes.
+    """
+
+    id: Optional[int] = None
+    trade_id: int = 0  # Reference to trades.id
+    snapshot_date: str = ""  # YYYY-MM-DD
+    current_price: float = 0.0
+    dte_calendar: int = 0
+    dte_trading: int = 0
+    moneyness_pct: float = 0.0
+    is_itm: bool = False
+    risk_level: str = ""
+    created_at: datetime = field(default_factory=datetime.now)

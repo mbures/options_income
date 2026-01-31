@@ -9,7 +9,7 @@ from typing import Iterator, Optional
 
 from src.models.profiles import StrikeProfile
 
-from .models import TradeRecord, WheelPerformance, WheelPosition
+from .models import PositionSnapshot, TradeRecord, WheelPerformance, WheelPosition
 from .state import TradeOutcome, WheelState
 
 logger = logging.getLogger(__name__)
@@ -86,6 +86,21 @@ class WheelRepository:
                     FOREIGN KEY (wheel_id) REFERENCES wheels(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS position_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trade_id INTEGER NOT NULL,
+                    snapshot_date TEXT NOT NULL,
+                    current_price REAL NOT NULL,
+                    dte_calendar INTEGER NOT NULL,
+                    dte_trading INTEGER NOT NULL,
+                    moneyness_pct REAL NOT NULL,
+                    is_itm INTEGER NOT NULL,
+                    risk_level TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (trade_id) REFERENCES trades(id),
+                    UNIQUE(trade_id, snapshot_date)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_trades_wheel
                     ON trades(wheel_id);
                 CREATE INDEX IF NOT EXISTS idx_trades_symbol
@@ -96,6 +111,10 @@ class WheelRepository:
                     ON wheels(symbol);
                 CREATE INDEX IF NOT EXISTS idx_wheels_active
                     ON wheels(is_active);
+                CREATE INDEX IF NOT EXISTS idx_snapshots_trade
+                    ON position_snapshots(trade_id);
+                CREATE INDEX IF NOT EXISTS idx_snapshots_date
+                    ON position_snapshots(snapshot_date);
             """
             )
         logger.debug(f"Database initialized at {self.db_path}")
@@ -435,3 +454,114 @@ class WheelRepository:
                     "SELECT SUM(total_premium) as total FROM trades"
                 ).fetchone()
             return row["total"] if row and row["total"] else 0.0
+
+    # Snapshot operations
+
+    def create_snapshot(self, snapshot: PositionSnapshot) -> PositionSnapshot:
+        """
+        Save a position snapshot.
+
+        Args:
+            snapshot: PositionSnapshot to create (id will be set).
+
+        Returns:
+            PositionSnapshot with assigned id.
+
+        Raises:
+            sqlite3.IntegrityError: If duplicate (trade_id, snapshot_date) exists.
+        """
+        now = datetime.now().isoformat()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO position_snapshots
+                (trade_id, snapshot_date, current_price, dte_calendar, dte_trading,
+                 moneyness_pct, is_itm, risk_level, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot.trade_id,
+                    snapshot.snapshot_date,
+                    snapshot.current_price,
+                    snapshot.dte_calendar,
+                    snapshot.dte_trading,
+                    snapshot.moneyness_pct,
+                    1 if snapshot.is_itm else 0,
+                    snapshot.risk_level,
+                    now,
+                ),
+            )
+            snapshot.id = cursor.lastrowid
+            snapshot.created_at = datetime.fromisoformat(now)
+        logger.debug(
+            f"Created snapshot for trade_id={snapshot.trade_id} "
+            f"on {snapshot.snapshot_date}"
+        )
+        return snapshot
+
+    def get_snapshots(
+        self,
+        trade_id: int,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> list[PositionSnapshot]:
+        """
+        Get snapshots for a trade, optionally filtered by date range.
+
+        Args:
+            trade_id: Trade ID to get snapshots for
+            start_date: Optional start date (YYYY-MM-DD), inclusive
+            end_date: Optional end date (YYYY-MM-DD), inclusive
+
+        Returns:
+            List of PositionSnapshot objects, ordered by date ascending
+        """
+        query = "SELECT * FROM position_snapshots WHERE trade_id = ?"
+        params: list = [trade_id]
+
+        if start_date:
+            query += " AND snapshot_date >= ?"
+            params.append(start_date)
+        if end_date:
+            query += " AND snapshot_date <= ?"
+            params.append(end_date)
+
+        query += " ORDER BY snapshot_date"
+
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [self._row_to_snapshot(row) for row in rows]
+
+    def has_snapshots_for_date(self, snapshot_date: date) -> bool:
+        """
+        Check if any snapshots exist for a given date.
+
+        Args:
+            snapshot_date: Date to check
+
+        Returns:
+            True if snapshots exist for this date
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "SELECT COUNT(*) as count FROM position_snapshots WHERE snapshot_date = ?",
+                (str(snapshot_date),),
+            )
+            row = cursor.fetchone()
+            count = row["count"] if row else 0
+        return count > 0
+
+    def _row_to_snapshot(self, row: sqlite3.Row) -> PositionSnapshot:
+        """Convert a database row to a PositionSnapshot."""
+        return PositionSnapshot(
+            id=row["id"],
+            trade_id=row["trade_id"],
+            snapshot_date=row["snapshot_date"],
+            current_price=row["current_price"],
+            dte_calendar=row["dte_calendar"],
+            dte_trading=row["dte_trading"],
+            moneyness_pct=row["moneyness_pct"],
+            is_itm=bool(row["is_itm"]),
+            risk_level=row["risk_level"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )

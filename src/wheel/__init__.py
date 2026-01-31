@@ -24,6 +24,8 @@ from .exceptions import (
     WheelError,
 )
 from .models import (
+    PositionSnapshot,
+    PositionStatus,
     TradeRecord,
     WheelPerformance,
     WheelPosition,
@@ -44,6 +46,8 @@ __all__ = [
     "TradeRecord",
     "WheelRecommendation",
     "WheelPerformance",
+    "PositionStatus",
+    "PositionSnapshot",
     # State machine
     "WheelState",
     "TradeOutcome",
@@ -76,4 +80,7 @@ def __getattr__(name: str):
     if name == "WheelRepository":
         from .repository import WheelRepository
         return WheelRepository
+    if name == "PositionMonitor":
+        from .monitor import PositionMonitor
+        return PositionMonitor
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
