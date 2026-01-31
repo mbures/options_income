@@ -83,6 +83,58 @@ python -m src.wheel.cli recommend AAPL
 python -m src.wheel.cli status AAPL
 ```
 
+### 5. Run FastAPI Backend Server (NEW)
+
+The system now includes a FastAPI backend server for RESTful API access to wheel strategy functionality.
+
+**Start the server:**
+```bash
+# Development mode with auto-reload
+uvicorn src.server.main:app --reload --port 8000
+
+# Or run directly
+python -m src.server.main
+```
+
+**Access the API:**
+- Health check: http://localhost:8000/health
+- System info: http://localhost:8000/api/v1/info
+- Interactive API docs: http://localhost:8000/docs
+- ReDoc documentation: http://localhost:8000/redoc
+- OpenAPI schema: http://localhost:8000/openapi.json
+
+**Configuration:**
+The server can be configured using environment variables with `WHEEL_` prefix:
+```bash
+export WHEEL_DEBUG=true
+export WHEEL_DATABASE_PATH=~/.wheel_strategy/trades.db
+export WHEEL_HOST=0.0.0.0
+export WHEEL_PORT=8000
+```
+
+**CORS Configuration:**
+By default, the server allows requests from:
+- http://localhost:3000
+- http://localhost:8080
+- http://127.0.0.1:3000
+- http://127.0.0.1:8080
+
+**Database Migrations:**
+The server uses Alembic for database migrations:
+```bash
+# View current migration status
+alembic current
+
+# View migration history
+alembic history
+
+# Apply migrations (when available)
+alembic upgrade head
+
+# Rollback one version
+alembic downgrade -1
+```
+
 ## Sample Programs
 
 ### example_end_to_end.py
