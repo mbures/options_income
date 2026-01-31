@@ -6,6 +6,11 @@ import pytest
 
 from src.schwab.client import SchwabClient
 from src.schwab.models import SchwabAccount, SchwabAccountBalances, SchwabPosition
+from src.schwab.parsers import (
+    parse_schwab_account,
+    parse_schwab_balances,
+    parse_schwab_position,
+)
 
 
 class TestAccountDataEndpoints:
@@ -234,7 +239,7 @@ class TestAccountDataEndpoints:
             }
         }
 
-        account = client._parse_schwab_account(account_data)
+        account = parse_schwab_account(account_data)
 
         assert account.account_number == "TEST123"
         assert account.account_type == "MARGIN"
@@ -260,7 +265,7 @@ class TestAccountDataEndpoints:
             "currentDayProfitLossPercentage": 4.35,
         }
 
-        position = client._parse_schwab_position(position_data)
+        position = parse_schwab_position(position_data)
 
         assert position.symbol == "TSLA"
         assert position.quantity == 50.0
@@ -281,7 +286,7 @@ class TestAccountDataEndpoints:
             "buyingPower": 50000.00,
         }
 
-        balances = client._parse_schwab_balances(balance_data)
+        balances = parse_schwab_balances(balance_data)
 
         assert balances.cash_balance == 15000.00
         assert balances.cash_available_for_trading == 14500.00

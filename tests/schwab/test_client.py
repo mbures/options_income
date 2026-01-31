@@ -55,13 +55,13 @@ class TestSchwabClient:
 
     def test_get_full_url_constructs_correct_url(self, client):
         """_get_full_url constructs correct API URLs."""
-        # With leading slash
-        url = client._get_full_url("/marketdata/quotes")
-        assert url == "https://api.schwabapi.com/v1/marketdata/quotes"
+        # With leading slash (endpoints already include version)
+        url = client._get_full_url("/marketdata/v1/quotes")
+        assert url == "https://api.schwabapi.com/marketdata/v1/quotes"
 
         # Without leading slash
-        url = client._get_full_url("marketdata/quotes")
-        assert url == "https://api.schwabapi.com/v1/marketdata/quotes"
+        url = client._get_full_url("marketdata/v1/quotes")
+        assert url == "https://api.schwabapi.com/marketdata/v1/quotes"
 
         # With version already included
         url = client._get_full_url("/v1/marketdata/quotes")

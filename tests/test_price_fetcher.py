@@ -366,15 +366,15 @@ class TestSchwabPriceDataFetcher:
         client = self.create_mock_schwab_client()
         fetcher = SchwabPriceDataFetcher(client)
 
-        # 5 days -> day, 5
+        # 5 days -> month, 1 (periodType "day" only supports minute data)
         period_type, period = fetcher._lookback_to_schwab_params(5)
-        assert period_type == "day"
-        assert period == 5
+        assert period_type == "month"
+        assert period == 1
 
-        # 10 days -> day, 10
+        # 10 days -> month, 1
         period_type, period = fetcher._lookback_to_schwab_params(10)
-        assert period_type == "day"
-        assert period == 10
+        assert period_type == "month"
+        assert period == 1
 
     def test_lookback_to_schwab_params_medium(self):
         """Test conversion of medium lookback to Schwab parameters."""

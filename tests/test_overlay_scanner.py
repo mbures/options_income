@@ -36,6 +36,17 @@ from src.overlay_scanner import (
     ScanResult,
     SlippageModel,
 )
+from src.scanning.filters import (
+    apply_delta_band_filter,
+    apply_tradability_filters,
+    calculate_near_miss_score,
+    get_delta_band,
+    populate_near_miss_details,
+)
+from src.scanning.formatters import (
+    generate_broker_checklist,
+    generate_llm_memo_payload,
+)
 from src.strike_optimizer import ProbabilityResult, StrikeOptimizer
 
 # =============================================================================
@@ -439,36 +450,36 @@ class TestDeltaBand:
 
     def test_delta_band_defensive(self, scanner):
         """Test defensive delta band (0.05-0.10)."""
-        assert scanner.get_delta_band(0.05) == DeltaBand.DEFENSIVE
-        assert scanner.get_delta_band(0.07) == DeltaBand.DEFENSIVE
-        assert scanner.get_delta_band(0.099) == DeltaBand.DEFENSIVE
+        assert get_delta_band(0.05) == DeltaBand.DEFENSIVE
+        assert get_delta_band(0.07) == DeltaBand.DEFENSIVE
+        assert get_delta_band(0.099) == DeltaBand.DEFENSIVE
 
     def test_delta_band_conservative(self, scanner):
         """Test conservative delta band (0.10-0.15)."""
-        assert scanner.get_delta_band(0.10) == DeltaBand.CONSERVATIVE
-        assert scanner.get_delta_band(0.12) == DeltaBand.CONSERVATIVE
-        assert scanner.get_delta_band(0.149) == DeltaBand.CONSERVATIVE
+        assert get_delta_band(0.10) == DeltaBand.CONSERVATIVE
+        assert get_delta_band(0.12) == DeltaBand.CONSERVATIVE
+        assert get_delta_band(0.149) == DeltaBand.CONSERVATIVE
 
     def test_delta_band_moderate(self, scanner):
         """Test moderate delta band (0.15-0.25)."""
-        assert scanner.get_delta_band(0.15) == DeltaBand.MODERATE
-        assert scanner.get_delta_band(0.20) == DeltaBand.MODERATE
-        assert scanner.get_delta_band(0.249) == DeltaBand.MODERATE
+        assert get_delta_band(0.15) == DeltaBand.MODERATE
+        assert get_delta_band(0.20) == DeltaBand.MODERATE
+        assert get_delta_band(0.249) == DeltaBand.MODERATE
 
     def test_delta_band_aggressive(self, scanner):
         """Test aggressive delta band (0.25-0.35)."""
-        assert scanner.get_delta_band(0.25) == DeltaBand.AGGRESSIVE
-        assert scanner.get_delta_band(0.30) == DeltaBand.AGGRESSIVE
-        assert scanner.get_delta_band(0.349) == DeltaBand.AGGRESSIVE
+        assert get_delta_band(0.25) == DeltaBand.AGGRESSIVE
+        assert get_delta_band(0.30) == DeltaBand.AGGRESSIVE
+        assert get_delta_band(0.349) == DeltaBand.AGGRESSIVE
 
     def test_delta_band_outside_ranges(self, scanner):
         """Test delta outside all bands returns None."""
-        assert scanner.get_delta_band(0.01) is None  # Too low
-        assert scanner.get_delta_band(0.50) is None  # Too high
+        assert get_delta_band(0.01) is None  # Too low
+        assert get_delta_band(0.50) is None  # Too high
 
     def test_delta_band_negative_converted(self, scanner):
         """Test negative delta is converted to absolute value."""
-        assert scanner.get_delta_band(-0.12) == DeltaBand.CONSERVATIVE
+        assert get_delta_band(-0.12) == DeltaBand.CONSERVATIVE
 
 
 # =============================================================================
@@ -510,7 +521,7 @@ class TestTradabilityFilters:
             days_to_expiry=7,
         )
 
-        reasons, details = scanner.apply_tradability_filters(candidate)
+        reasons, details = apply_tradability_filters(candidate, scanner.config)
         assert RejectionReason.ZERO_BID in reasons
         assert len(details) > 0
         assert any(d.reason == RejectionReason.ZERO_BID for d in details)
@@ -546,7 +557,7 @@ class TestTradabilityFilters:
             days_to_expiry=7,
         )
 
-        reasons, details = scanner.apply_tradability_filters(candidate)
+        reasons, details = apply_tradability_filters(candidate, scanner.config)
         assert RejectionReason.LOW_PREMIUM in reasons
         assert any(d.reason == RejectionReason.LOW_PREMIUM for d in details)
 
@@ -581,7 +592,7 @@ class TestTradabilityFilters:
             days_to_expiry=7,
         )
 
-        reasons, details = scanner.apply_tradability_filters(candidate)
+        reasons, details = apply_tradability_filters(candidate, scanner.config)
         assert RejectionReason.WIDE_SPREAD_ABSOLUTE in reasons
         assert any(d.reason == RejectionReason.WIDE_SPREAD_ABSOLUTE for d in details)
 
@@ -616,7 +627,7 @@ class TestTradabilityFilters:
             days_to_expiry=7,
         )
 
-        reasons, details = scanner.apply_tradability_filters(candidate)
+        reasons, details = apply_tradability_filters(candidate, scanner.config)
         assert RejectionReason.LOW_OPEN_INTEREST in reasons
         # Verify margin calculation: 50/100 = 0.5 shortfall
         oi_detail = next(d for d in details if d.reason == RejectionReason.LOW_OPEN_INTEREST)
@@ -655,7 +666,7 @@ class TestTradabilityFilters:
             days_to_expiry=7,
         )
 
-        reasons, details = scanner.apply_tradability_filters(candidate)
+        reasons, details = apply_tradability_filters(candidate, scanner.config)
         assert RejectionReason.LOW_VOLUME in reasons
         vol_detail = next(d for d in details if d.reason == RejectionReason.LOW_VOLUME)
         assert vol_detail.actual_value == 5
@@ -699,7 +710,7 @@ class TestTradabilityFilters:
             days_to_expiry=7,
         )
 
-        reasons, details = scanner.apply_tradability_filters(candidate)
+        reasons, details = apply_tradability_filters(candidate, scanner.config)
         assert RejectionReason.FRICTION_TOO_HIGH in reasons
         friction_detail = next(d for d in details if d.reason == RejectionReason.FRICTION_TOO_HIGH)
         assert friction_detail.actual_value == 4.35  # net_credit
@@ -745,7 +756,7 @@ class TestTradabilityFilters:
         )
 
         # Pass current_price=$100 to enable yield calculation
-        reasons, details = scanner.apply_tradability_filters(candidate, current_price=100.0)
+        reasons, details = apply_tradability_filters(candidate, scanner.config, current_price=100.0)
         assert RejectionReason.YIELD_TOO_LOW in reasons
         yield_detail = next(d for d in details if d.reason == RejectionReason.YIELD_TOO_LOW)
         # actual_yield_bps = (5.00 / 10000) * 10000 = 5 bps
@@ -783,7 +794,7 @@ class TestTradabilityFilters:
             days_to_expiry=7,
         )
 
-        reasons, details = scanner.apply_tradability_filters(candidate)
+        reasons, details = apply_tradability_filters(candidate, scanner.config)
         assert len(reasons) == 0
         assert len(details) == 0
 
@@ -826,7 +837,7 @@ class TestTradabilityFilters:
             days_to_expiry=7,
         )
 
-        reasons, details = scanner.apply_tradability_filters(candidate)
+        reasons, details = apply_tradability_filters(candidate, scanner.config)
 
         # Should NOT have WIDE_SPREAD_RELATIVE because mid < $0.50
         assert RejectionReason.WIDE_SPREAD_RELATIVE not in reasons
@@ -867,7 +878,7 @@ class TestTradabilityFilters:
             days_to_expiry=7,
         )
 
-        reasons, details = scanner.apply_tradability_filters(candidate)
+        reasons, details = apply_tradability_filters(candidate, scanner.config)
 
         # SHOULD have WIDE_SPREAD_RELATIVE because mid >= $0.50 and spread% > 20%
         assert RejectionReason.WIDE_SPREAD_RELATIVE in reasons
@@ -982,8 +993,8 @@ class TestBrokerChecklist:
             days_to_expiry=7,
         )
 
-        checklist = scanner.generate_broker_checklist(
-            symbol="AAPL", candidate=candidate, earnings_clear=True, dividend_verified=False
+        checklist = generate_broker_checklist(
+            symbol="AAPL", candidate=candidate, config=scanner.config, earnings_clear=True, dividend_verified=False
         )
 
         assert checklist.symbol == "AAPL"
@@ -1027,7 +1038,7 @@ class TestBrokerChecklist:
             days_to_expiry=7,
         )
 
-        checklist = scanner.generate_broker_checklist("AAPL", candidate, True, False)
+        checklist = generate_broker_checklist("AAPL", candidate, scanner.config, True, False)
         d = checklist.to_dict()
 
         assert "symbol" in d
@@ -1076,11 +1087,12 @@ class TestLLMMemoPayload:
             days_to_expiry=7,
         )
 
-        payload = scanner.generate_llm_memo_payload(
+        payload = generate_llm_memo_payload(
             symbol="AAPL",
             current_price=185.50,
             holding=sample_holding,
             candidate=candidate,
+            config=scanner.config,
             earnings_status="CLEAR",
             dividend_status="UNVERIFIED",
         )
@@ -1125,8 +1137,8 @@ class TestLLMMemoPayload:
             days_to_expiry=7,
         )
 
-        payload = scanner.generate_llm_memo_payload(
-            "AAPL", 185.50, sample_holding, candidate, "CLEAR", "UNVERIFIED"
+        payload = generate_llm_memo_payload(
+            "AAPL", 185.50, sample_holding, candidate, scanner.config, "CLEAR", "UNVERIFIED"
         )
         d = payload.to_dict()
 
@@ -1701,7 +1713,7 @@ class TestNearMissAnalysis:
             )
         ]
 
-        score = scanner.calculate_near_miss_score(candidate, max_net_credit=100.0)
+        score = calculate_near_miss_score(candidate, max_net_credit=100.0)
 
         # Should have decent score with single rejection and moderate margin
         assert 0.3 < score < 0.8
@@ -1751,7 +1763,7 @@ class TestNearMissAnalysis:
             RejectionDetail(RejectionReason.OUTSIDE_DELTA_BAND, 0.08, 0.10, 0.2, "delta=0.08"),
         ]
 
-        score = scanner.calculate_near_miss_score(candidate, max_net_credit=100.0)
+        score = calculate_near_miss_score(candidate, max_net_credit=100.0)
 
         # Score should be lower with many rejections
         assert score < 0.5
@@ -1795,7 +1807,7 @@ class TestNearMissAnalysis:
             RejectionDetail(RejectionReason.LOW_VOLUME, 8, 10, 0.2, "vol=8 vs 10"),
         ]
 
-        scanner.populate_near_miss_details(candidate)
+        populate_near_miss_details(candidate)
 
         # Binding should be the one with smallest margin
         assert candidate.binding_constraint is not None
@@ -1876,7 +1888,7 @@ class TestNearMissAnalysis:
             days_to_expiry=7,
         )
 
-        detail = scanner.apply_delta_band_filter(candidate)
+        detail = apply_delta_band_filter(candidate, scanner.config)
 
         assert detail is not None
         assert detail.reason == RejectionReason.OUTSIDE_DELTA_BAND
@@ -1917,7 +1929,7 @@ class TestNearMissAnalysis:
             days_to_expiry=7,
         )
 
-        detail = scanner.apply_delta_band_filter(candidate)
+        detail = apply_delta_band_filter(candidate, scanner.config)
 
         assert detail is None  # Should pass filter
 

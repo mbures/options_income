@@ -8,6 +8,7 @@ import pytest
 from src.models.base import OptionsChain
 from src.schwab.client import SchwabClient
 from src.schwab.exceptions import SchwabInvalidSymbolError
+from src.schwab.parsers import parse_schwab_contract
 
 
 class TestMarketDataEndpoints:
@@ -299,7 +300,7 @@ class TestMarketDataEndpoints:
             "vega": 0.18,
         }
 
-        contract = client._parse_schwab_contract(
+        contract = parse_schwab_contract(
             "AAPL", "2026-02-21", 155.0, "Call", contract_data
         )
 
