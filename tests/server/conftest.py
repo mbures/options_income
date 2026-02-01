@@ -19,6 +19,7 @@ from src.server.main import app
 
 # Import all models to ensure they're registered with Base
 from src.server.database.models import (  # noqa: F401
+    JobExecution,
     PerformanceMetrics,
     Portfolio,
     SchedulerConfig,

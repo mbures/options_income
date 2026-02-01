@@ -10,8 +10,10 @@ Models:
     Snapshot: Daily historical snapshots of open positions
     PerformanceMetrics: Pre-calculated performance analytics
     SchedulerConfig: Configuration for background scheduled tasks
+    JobExecution: Execution history for scheduled background tasks
 """
 
+from .job_execution import JobExecution
 from .performance import PerformanceMetrics
 from .portfolio import Portfolio
 from .scheduler import SchedulerConfig
@@ -26,4 +28,5 @@ __all__ = [
     "Snapshot",
     "PerformanceMetrics",
     "SchedulerConfig",
+    "JobExecution",
 ]

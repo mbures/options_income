@@ -19,11 +19,13 @@ from src.server.repositories.trade import TradeRepository
 from src.server.repositories.wheel import WheelRepository
 from src.server.services.position_service import PositionMonitorService
 from src.server.services.recommendation_service import RecommendationService
+from src.server.tasks.execution_logger import log_execution
 from src.server.tasks.market_hours import is_market_open
 
 logger = logging.getLogger(__name__)
 
 
+@log_execution("price_refresh", "Price Refresh Task")
 def price_refresh_task():
     """Refresh prices for all open positions.
 
@@ -58,6 +60,7 @@ def price_refresh_task():
         db.close()
 
 
+@log_execution("daily_snapshot", "Daily Snapshot Task")
 def daily_snapshot_task():
     """Create daily snapshots of all open positions.
 
@@ -130,6 +133,7 @@ def daily_snapshot_task():
         db.close()
 
 
+@log_execution("risk_monitoring", "Risk Monitoring Task")
 def risk_monitoring_task():
     """Monitor positions for high risk situations.
 
@@ -191,6 +195,7 @@ def risk_monitoring_task():
         db.close()
 
 
+@log_execution("opportunity_scanning", "Opportunity Scanning Task")
 def opportunity_scanning_task():
     """Scan for new trading opportunities.
 

@@ -13,6 +13,7 @@ from src.server.api.v1 import (
     portfolios,
     positions,
     recommendations,
+    scheduler,
     trades,
     wheels,
 )
@@ -34,6 +35,7 @@ router.include_router(wheels.router)
 router.include_router(trades.router)
 router.include_router(recommendations.router)
 router.include_router(positions.router)
+router.include_router(scheduler.router)
 
 
 @router.get(
