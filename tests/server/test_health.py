@@ -145,18 +145,21 @@ def test_health_endpoint_response_structure(client_no_db: TestClient):
     Asserts:
         - Response structure matches HealthResponse model
         - Timestamp is in valid ISO format
+        - Scheduler running status is included
     """
     response = client_no_db.get("/health")
     assert response.status_code == status.HTTP_200_OK
 
     data = response.json()
 
-    # Verify structure
-    assert set(data.keys()) == {"status", "timestamp"}
+    # Verify structure (scheduler_running is optional but should be present)
+    expected_keys = {"status", "timestamp", "scheduler_running"}
+    assert set(data.keys()) == expected_keys
 
     # Verify types
     assert isinstance(data["status"], str)
     assert isinstance(data["timestamp"], str)
+    assert isinstance(data["scheduler_running"], bool)
 
     # Verify timestamp is valid ISO format
     from datetime import datetime

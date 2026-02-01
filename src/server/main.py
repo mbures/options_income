@@ -15,6 +15,7 @@ from src.server import __version__
 from src.server.api.v1.router import router as v1_router
 from src.server.config import settings
 from src.server.models.common import HealthResponse
+from src.server.services.scheduler_service import get_scheduler_service
 
 # Configure logging
 logging.basicConfig(
@@ -57,6 +58,15 @@ async def startup_event():
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Database path: {settings.database_path}")
 
+    # Initialize and start scheduler
+    try:
+        scheduler = get_scheduler_service()
+        scheduler.initialize()
+        scheduler.start()
+        logger.info("Background scheduler started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start background scheduler: {e}", exc_info=True)
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -66,6 +76,14 @@ async def shutdown_event():
     """
     logger.info(f"Shutting down {settings.app_name}")
 
+    # Shutdown scheduler
+    try:
+        scheduler = get_scheduler_service()
+        scheduler.shutdown(wait=True)
+        logger.info("Background scheduler shutdown successfully")
+    except Exception as e:
+        logger.error(f"Error during scheduler shutdown: {e}", exc_info=True)
+
 
 @app.get(
     "/health",
@@ -73,21 +91,36 @@ async def shutdown_event():
     status_code=status.HTTP_200_OK,
     tags=["health"],
     summary="Health check endpoint",
-    description="Returns service health status",
+    description="Returns service health status including scheduler",
 )
 async def health_check() -> HealthResponse:
     """Health check endpoint.
 
-    Simple endpoint to verify the service is running.
+    Simple endpoint to verify the service is running and check
+    background scheduler status.
 
     Returns:
-        Health status response with timestamp
+        Health status response with timestamp and scheduler status
 
     Example:
         >>> GET /health
-        >>> {"status": "healthy", "timestamp": "2026-01-31T10:00:00"}
+        >>> {
+        >>>     "status": "healthy",
+        >>>     "timestamp": "2026-02-01T10:00:00",
+        >>>     "scheduler_running": true
+        >>> }
     """
-    return HealthResponse(status="healthy", timestamp=datetime.utcnow())
+    # Check scheduler status
+    scheduler_running = False
+    try:
+        scheduler = get_scheduler_service()
+        scheduler_running = scheduler.is_running
+    except Exception as e:
+        logger.warning(f"Failed to get scheduler status: {e}")
+
+    return HealthResponse(
+        status="healthy", timestamp=datetime.utcnow(), scheduler_running=scheduler_running
+    )
 
 
 @app.get(

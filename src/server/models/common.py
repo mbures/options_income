@@ -15,11 +15,15 @@ class HealthResponse(BaseModel):
     Attributes:
         status: Service health status
         timestamp: Current server timestamp
+        scheduler_running: Whether background scheduler is running
     """
 
     status: str = Field(default="healthy", description="Service health status")
     timestamp: datetime = Field(
         default_factory=datetime.utcnow, description="Current server timestamp"
+    )
+    scheduler_running: Optional[bool] = Field(
+        default=None, description="Whether background scheduler is running"
     )
 
 
