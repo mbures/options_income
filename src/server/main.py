@@ -16,6 +16,7 @@ from src.server.api.v1.router import router as v1_router
 from src.server.config import settings
 from src.server.models.common import HealthResponse
 from src.server.services.scheduler_service import get_scheduler_service
+from src.server.tasks.task_loader import register_core_tasks
 
 # Configure logging
 logging.basicConfig(
@@ -64,6 +65,10 @@ async def startup_event():
         scheduler.initialize()
         scheduler.start()
         logger.info("Background scheduler started successfully")
+
+        # Register core scheduled tasks
+        register_core_tasks(scheduler)
+        logger.info("Core scheduled tasks registered")
     except Exception as e:
         logger.error(f"Failed to start background scheduler: {e}", exc_info=True)
 
