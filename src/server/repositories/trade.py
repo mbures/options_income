@@ -381,3 +381,21 @@ class TradeRepository:
             .first()
         )
         return trade
+
+    def list_open_trades(self) -> list[Trade]:
+        """List all open trades across all wheels.
+
+        Returns:
+            List of open trade instances, ordered by opened_at descending
+
+        Example:
+            >>> repo = TradeRepository(db)
+            >>> open_trades = repo.list_open_trades()
+        """
+        trades = (
+            self.db.query(Trade)
+            .filter(Trade.outcome == "open")
+            .order_by(Trade.opened_at.desc())
+            .all()
+        )
+        return trades
