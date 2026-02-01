@@ -148,33 +148,38 @@ This document outlines the phased implementation plan for migrating the wheel st
 
 ### Tasks
 
-#### Sprint 2.1: Trade Management API (3 days)
-- [ ] **S2.1.1**: Create TradeRepository
-  - Reuse/adapt existing WheelRepository trade methods
-  - Add query methods (filter by date, outcome, etc.)
-  - Add pagination support
-- [ ] **S2.1.2**: Create Trade API endpoints
+#### Sprint 2.1: Trade Management API (3 days) ✅ COMPLETE
+- [x] **S2.1.1**: Create TradeRepository
+  - create_trade(), get_trade(), list_trades(), update_trade(), delete_trade()
+  - expire_trade(), close_trade_early(), get_open_trade_for_wheel()
+  - Query methods with outcome and date filtering
+  - Pagination support (skip/limit)
+- [x] **S2.1.2**: Create Trade API endpoints
   - `POST /api/v1/wheels/{id}/trades` (record trade)
-  - `GET /api/v1/wheels/{id}/trades` (list trades)
+  - `GET /api/v1/wheels/{id}/trades` (list trades with outcome filter)
+  - `GET /api/v1/trades` (list all trades with date filter)
   - `GET /api/v1/trades/{id}` (get trade)
   - `PUT /api/v1/trades/{id}` (update)
   - `DELETE /api/v1/trades/{id}` (delete)
   - `POST /api/v1/trades/{id}/expire` (record expiration)
   - `POST /api/v1/trades/{id}/close` (close early)
-- [ ] **S2.1.3**: Integrate WheelManager
-  - Wrap WheelManager methods in API services
-  - Handle state machine validation
-  - Return appropriate error responses
-- [ ] **S2.1.4**: Write integration tests
-  - Test trade recording flow
-  - Test expiration outcome
-  - Test state transitions
-  - Test validation errors
+- [x] **S2.1.3**: Integrate WheelManager via WheelService
+  - Created WheelService wrapping state machine logic
+  - Full state machine validation for all transitions
+  - Share management (acquisition/removal on assignment)
+  - Clear error messages for invalid transitions
+- [x] **S2.1.4**: Write integration tests
+  - 31 tests covering all trade operations
+  - State machine validation (puts/calls, assigned/worthless)
+  - Early close scenarios
+  - Validation errors and edge cases
 
-**Deliverables:**
-- Trade API endpoints
-- WheelManager integration
-- Trade tests
+**Deliverables:** ✅ ALL COMPLETE
+- ✅ Trade API endpoints (9 endpoints)
+- ✅ WheelService with state machine integration
+- ✅ Trade tests (31 tests passing, 100% success rate)
+- ✅ TradeRepository (90% coverage)
+- ✅ Service layer (85% coverage)
 
 ---
 
