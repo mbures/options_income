@@ -18,6 +18,16 @@ if config.config_file_name is not None:
 from src.server.database.session import Base
 from src.server.config import settings
 
+# Import all models so Alembic can detect them for autogenerate
+from src.server.database.models import (
+    Portfolio,
+    Wheel,
+    Trade,
+    Snapshot,
+    PerformanceMetrics,
+    SchedulerConfig,
+)
+
 # Set target_metadata to our Base metadata for autogenerate
 target_metadata = Base.metadata
 
