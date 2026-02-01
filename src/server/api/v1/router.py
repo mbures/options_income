@@ -9,7 +9,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, status
 
-from src.server.api.v1 import portfolios, trades, wheels
+from src.server.api.v1 import portfolios, recommendations, trades, wheels
 from src.server.config import settings
 from src.server.database.session import check_database_connection
 from src.server.models.common import InfoResponse
@@ -26,6 +26,7 @@ router = APIRouter(
 router.include_router(portfolios.router)
 router.include_router(wheels.router)
 router.include_router(trades.router)
+router.include_router(recommendations.router)
 
 
 @router.get(
