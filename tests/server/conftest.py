@@ -10,12 +10,22 @@ from typing import Generator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.server.config import settings
 from src.server.database.session import Base, get_db
 from src.server.main import app
+
+# Import all models to ensure they're registered with Base
+from src.server.database.models import (  # noqa: F401
+    PerformanceMetrics,
+    Portfolio,
+    SchedulerConfig,
+    Snapshot,
+    Trade,
+    Wheel,
+)
 
 
 @pytest.fixture(scope="function")
@@ -34,10 +44,21 @@ def test_db() -> Generator[Session, None, None]:
         >>>     assert len(result) == 0
     """
     # Create in-memory SQLite database for testing
+    # Use poolclass to keep connection alive
+    from sqlalchemy.pool import StaticPool
+
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,  # Keep connection alive for in-memory database
     )
+
+    # Enable foreign key constraints for SQLite
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
     # Create all tables
     Base.metadata.create_all(bind=engine)
@@ -78,10 +99,8 @@ def client(test_db: Session) -> TestClient:
 
     def override_get_db():
         """Override database dependency with test database."""
-        try:
-            yield test_db
-        finally:
-            pass
+        # Return the same session for all requests in a test
+        yield test_db
 
     # Override the database dependency
     app.dependency_overrides[get_db] = override_get_db
@@ -90,7 +109,8 @@ def client(test_db: Session) -> TestClient:
     with TestClient(app) as test_client:
         yield test_client
 
-    # Clear overrides after test
+    # Clear overrides and rollback any uncommitted changes
+    test_db.rollback()
     app.dependency_overrides.clear()
 
 

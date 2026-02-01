@@ -9,6 +9,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, status
 
+from src.server.api.v1 import portfolios, wheels
 from src.server.config import settings
 from src.server.database.session import check_database_connection
 from src.server.models.common import InfoResponse
@@ -20,6 +21,10 @@ router = APIRouter(
     prefix="/api/v1",
     tags=["v1"],
 )
+
+# Include sub-routers
+router.include_router(portfolios.router)
+router.include_router(wheels.router)
 
 
 @router.get(
