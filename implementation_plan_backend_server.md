@@ -428,36 +428,47 @@ This document outlines the phased implementation plan for migrating the wheel st
 ### Tasks
 
 #### Sprint 4.1: Plugin Framework (4 days)
-- [ ] **S4.1.1**: Design plugin base class
-  - Abstract methods: name, default_schedule, execute
+- [x] **S4.1.1**: Design plugin base class
+  - BasePlugin abstract class with required methods
+  - Abstract methods: name, description, default_schedule, execute
   - Optional hooks: on_success, on_failure, on_startup
-  - Context access (db session, services, config)
-- [ ] **S4.1.2**: Create PluginManager
-  - Register plugins
-  - Discover plugins from directory
-  - Add to scheduler on registration
-  - Enable/disable plugins
-  - Unregister plugins
-- [ ] **S4.1.3**: Add plugin configuration
-  - Store enabled plugins in database
-  - Store custom schedules
-  - Persist plugin state
-- [ ] **S4.1.4**: Create plugin loading system
-  - Scan `plugins/` directory
-  - Import plugin modules
-  - Validate plugin implementations
-  - Handle import errors gracefully
-- [ ] **S4.1.5**: Write tests
-  - Test plugin discovery
-  - Test plugin registration
-  - Test plugin execution
-  - Test error handling
+  - PluginContext for dependency injection (db, config, scheduler)
+  - Configuration validation and JSON schema support
+- [x] **S4.1.2**: Create PluginManager
+  - register_plugin() - Register and initialize plugins
+  - unregister_plugin() - Remove plugins and cleanup
+  - enable_plugin() / disable_plugin() - Control scheduler registration
+  - discover_plugins() - Scan plugins/ directory for classes
+  - load_plugins() - Auto-discover and register all plugins
+  - load_enabled_plugins() - Load plugins from database config
+  - Global plugin manager singleton pattern
+- [x] **S4.1.3**: Add plugin configuration
+  - PluginConfig database model with enabled state
+  - PluginConfigRepository for CRUD operations
+  - Store custom schedules as JSON
+  - Store plugin-specific configuration data
+  - Persist plugin state with last_enabled_at timestamp
+- [x] **S4.1.4**: Create plugin loading system
+  - Scan plugins/ directory for Python modules
+  - Import plugin modules dynamically with importlib
+  - Validate BasePlugin subclasses
+  - Handle import errors gracefully with logging
+  - Automatic plugin instantiation and registration
+- [x] **S4.1.5**: Write tests
+  - 23 comprehensive tests covering all functionality
+  - TestPluginConfigRepository: 11 tests for config CRUD
+  - TestPluginManager: 7 tests for lifecycle management
+  - TestPluginExecution: 2 tests for execution
+  - TestPluginHooks: 3 tests for lifecycle hooks
+  - All tests passing with MemoryJobStore
 
-**Deliverables:**
-- Plugin base class
-- PluginManager
-- Plugin discovery
-- Tests
+**Deliverables:** ✅ ALL COMPLETE
+- ✅ Plugin base class (BasePlugin, PluginContext)
+- ✅ PluginManager service with discovery and lifecycle
+- ✅ Plugin configuration model and repository
+- ✅ Plugin discovery and loading system
+- ✅ Example HelloWorld plugin
+- ✅ Comprehensive tests (23 tests passing, 100% success rate)
 
 ---
 
