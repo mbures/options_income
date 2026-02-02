@@ -11,10 +11,12 @@ Models:
     PerformanceMetrics: Pre-calculated performance analytics
     SchedulerConfig: Configuration for background scheduled tasks
     JobExecution: Execution history for scheduled background tasks
+    PluginConfig: Configuration for dynamically loaded plugins
 """
 
 from .job_execution import JobExecution
 from .performance import PerformanceMetrics
+from .plugin_config import PluginConfig
 from .portfolio import Portfolio
 from .scheduler import SchedulerConfig
 from .snapshot import Snapshot
@@ -29,4 +31,5 @@ __all__ = [
     "PerformanceMetrics",
     "SchedulerConfig",
     "JobExecution",
+    "PluginConfig",
 ]

@@ -21,6 +21,7 @@ from src.server.main import app
 from src.server.database.models import (  # noqa: F401
     JobExecution,
     PerformanceMetrics,
+    PluginConfig,
     Portfolio,
     SchedulerConfig,
     Snapshot,
