@@ -489,7 +489,7 @@ class TestTradeExpiration:
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["outcome"] == "expired_assigned"
+        assert data["outcome"] == "assigned"
         assert data["price_at_expiry"] == 145.0
         assert data["closed_at"] is not None
 
@@ -538,7 +538,7 @@ class TestTradeExpiration:
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["outcome"] == "expired_assigned"
+        assert data["outcome"] == "called_away"
 
         # Verify wheel state updated to CASH with no shares
         wheel = test_db.query(Wheel).filter(Wheel.id == test_wheel_with_shares["id"]).first()

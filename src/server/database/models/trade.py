@@ -36,7 +36,7 @@ class Trade(Base):
         total_premium: Total premium collected (premium_per_share * contracts * 100)
         opened_at: Timestamp when trade was opened
         closed_at: Timestamp when trade was closed (if applicable)
-        outcome: Trade outcome ("open", "expired", "assigned", "called_away", "closed_early")
+        outcome: Trade outcome ("open", "assigned", "called_away", "expired_worthless", "closed_early")
         price_at_expiry: Stock price at expiration (if applicable)
         close_price: Premium paid to close early (if applicable)
         wheel: Relationship to Wheel

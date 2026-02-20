@@ -72,6 +72,9 @@ FINNHUB_API_KEY=your_finnhub_key
 
 ### 4. Run Wheel Strategy CLI
 
+The CLI supports two modes of operation:
+
+**Direct Mode (Default)**: CLI accesses database directly
 ```bash
 # Initialize a new wheel position
 python -m src.wheel.cli init AAPL --capital 15000
@@ -82,6 +85,22 @@ python -m src.wheel.cli recommend AAPL
 # View status
 python -m src.wheel.cli status AAPL
 ```
+
+**API Mode (NEW)**: CLI communicates with API server
+```bash
+# Start API server first (in another terminal)
+uvicorn src.server.main:app --port 8000
+
+# Configure API mode
+export WHEEL_API_URL="http://localhost:8000"
+
+# Use CLI in API mode (with portfolio support)
+python -m src.wheel.cli --api-mode portfolio create "Main Portfolio"
+python -m src.wheel.cli --api-mode init AAPL --capital 15000
+python -m src.wheel.cli --api-mode list --refresh
+```
+
+For complete CLI API mode documentation, see [CLI API Mode Guide](docs/CLI_API_MODE_GUIDE.md).
 
 ### 5. Run FastAPI Backend Server (NEW)
 

@@ -282,7 +282,7 @@ class WheelManager:
 
     # --- Recommendations ---
 
-    def get_recommendation(self, symbol: str) -> WheelRecommendation:
+    def get_recommendation(self, symbol: str, max_dte: int = 14) -> WheelRecommendation:
         """
         Get recommendation based on current state.
 
@@ -292,6 +292,7 @@ class WheelManager:
 
         Args:
             symbol: Stock ticker symbol
+            max_dte: Maximum days to expiration for search window
 
         Returns:
             WheelRecommendation for next trade
@@ -306,11 +307,14 @@ class WheelManager:
         if not wheel:
             raise SymbolNotFoundError(f"No wheel found for {symbol}")
 
-        return self.recommend_engine.get_recommendation(wheel)
+        return self.recommend_engine.get_recommendation(wheel, max_dte=max_dte)
 
-    def get_all_recommendations(self) -> list[WheelRecommendation]:
+    def get_all_recommendations(self, max_dte: int = 14) -> list[WheelRecommendation]:
         """
         Get recommendations for all active wheels without open positions.
+
+        Args:
+            max_dte: Maximum days to expiration for search window
 
         Returns:
             List of WheelRecommendation for each eligible wheel
@@ -321,7 +325,9 @@ class WheelManager:
         for wheel in wheels:
             if not wheel.has_open_position:
                 try:
-                    rec = self.recommend_engine.get_recommendation(wheel)
+                    rec = self.recommend_engine.get_recommendation(
+                        wheel, max_dte=max_dte
+                    )
                     recommendations.append(rec)
                 except Exception as e:
                     logger.warning(

@@ -87,8 +87,9 @@ class WheelRepository:
             symbol=wheel_data.symbol,
             capital_allocated=wheel_data.capital_allocated,
             profile=wheel_data.profile,
-            state="cash",
-            shares_held=0,
+            state=wheel_data.state or "cash",
+            shares_held=wheel_data.shares or 0,
+            cost_basis=wheel_data.cost_basis,
             is_active=True,
         )
 

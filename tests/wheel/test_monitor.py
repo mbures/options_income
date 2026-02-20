@@ -185,7 +185,7 @@ class TestPositionMonitor:
     def test_fetch_current_price_cache_hit(self):
         """Test price fetching uses cache within TTL."""
         monitor = PositionMonitor()
-        monitor._cache["AAPL"] = (155.50, datetime.now())
+        monitor._cache["AAPL"] = ({"lastPrice": 155.50}, datetime.now())
 
         price = monitor._fetch_current_price("AAPL", force_refresh=False)
 
@@ -197,7 +197,7 @@ class TestPositionMonitor:
         schwab = Mock()
         schwab.get_quote.return_value = {"lastPrice": 160.00}
         monitor = PositionMonitor(schwab_client=schwab)
-        monitor._cache["AAPL"] = (155.50, datetime.now())
+        monitor._cache["AAPL"] = ({"lastPrice": 155.50}, datetime.now())
 
         price = monitor._fetch_current_price("AAPL", force_refresh=True)
 
@@ -210,6 +210,44 @@ class TestPositionMonitor:
 
         with pytest.raises(ValueError, match="No price data provider"):
             monitor._fetch_current_price("AAPL", force_refresh=True)
+
+    # Quote data tests
+
+    def test_fetch_quote_data_returns_ohlc(self):
+        """Test _fetch_quote_data returns full OHLC dict from Schwab."""
+        schwab = Mock()
+        schwab.get_quote.return_value = {
+            "lastPrice": 155.50,
+            "openPrice": 153.00,
+            "highPrice": 156.00,
+            "lowPrice": 152.50,
+            "closePrice": 154.00,
+        }
+        monitor = PositionMonitor(schwab_client=schwab)
+
+        quote = monitor._fetch_quote_data("AAPL", force_refresh=True)
+
+        assert quote["lastPrice"] == 155.50
+        assert quote["openPrice"] == 153.00
+        assert quote["highPrice"] == 156.00
+        assert quote["lowPrice"] == 152.50
+        assert quote["closePrice"] == 154.00
+
+    def test_fetch_quote_data_fallback_has_none_ohlc(self):
+        """Test _fetch_quote_data from fallback fetcher has None OHLC."""
+        schwab = Mock()
+        schwab.get_quote.side_effect = Exception("Schwab error")
+        fetcher = Mock()
+        fetcher.get_current_price.return_value = 155.50
+        monitor = PositionMonitor(schwab_client=schwab, price_fetcher=fetcher)
+
+        quote = monitor._fetch_quote_data("AAPL", force_refresh=True)
+
+        assert quote["lastPrice"] == 155.50
+        assert quote["openPrice"] is None
+        assert quote["highPrice"] is None
+        assert quote["lowPrice"] is None
+        assert quote["closePrice"] is None
 
     # Helper method tests
 
@@ -247,15 +285,25 @@ class TestPositionMonitor:
 
     # Integration tests
 
+    @patch("src.server.tasks.market_hours.is_market_open")
     @patch("src.wheel.monitor.calculate_days_to_expiry")
     @patch("src.wheel.monitor.calculate_trading_days")
-    def test_get_position_status(self, mock_trading_days, mock_days_to_expiry):
+    def test_get_position_status(
+        self, mock_trading_days, mock_days_to_expiry, mock_market_open
+    ):
         """Test getting position status with mocked price."""
         mock_days_to_expiry.return_value = 24
         mock_trading_days.return_value = 17
+        mock_market_open.return_value = True
 
         schwab = Mock()
-        schwab.get_quote.return_value = {"lastPrice": 155.00}
+        schwab.get_quote.return_value = {
+            "lastPrice": 155.00,
+            "openPrice": 153.00,
+            "highPrice": 156.00,
+            "lowPrice": 152.50,
+            "closePrice": 154.00,
+        }
         monitor = PositionMonitor(schwab_client=schwab)
 
         position = WheelPosition(
@@ -285,6 +333,12 @@ class TestPositionMonitor:
         assert status.is_otm is True
         assert status.risk_level == "MEDIUM"
         assert status.premium_collected == 250.0
+        # Verify OHLC fields
+        assert status.open_price == 153.00
+        assert status.high_price == 156.00
+        assert status.low_price == 152.50
+        assert status.close_price == 154.00
+        assert status.market_open is True
 
     def test_get_position_status_invalid_state_raises(self):
         """Test error when position not in monitorable state."""

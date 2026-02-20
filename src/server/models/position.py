@@ -90,7 +90,8 @@ class PositionStatusResponse(BaseModel):
 class PositionSummaryResponse(BaseModel):
     """Response schema for position summary listing.
 
-    Provides a simplified view for listing multiple positions.
+    Provides a simplified view for listing multiple positions,
+    including OHLC data and market state for dashboard display.
 
     Attributes:
         wheel_id: Associated wheel identifier
@@ -101,7 +102,13 @@ class PositionSummaryResponse(BaseModel):
         expiration_date: Expiration date
         dte_calendar: Calendar days to expiration
         current_price: Current stock price
+        open_price: Day's opening price
+        high_price: Day's high price
+        low_price: Day's low price
+        close_price: Previous close price
         moneyness_pct: Percentage distance from strike
+        moneyness_label: Human-readable moneyness description
+        market_open: Whether the market is currently open
         risk_level: Risk level
         risk_icon: Visual risk indicator
         premium_collected: Premium collected
@@ -115,7 +122,17 @@ class PositionSummaryResponse(BaseModel):
     expiration_date: str = Field(..., description="Expiration date (YYYY-MM-DD)")
     dte_calendar: int = Field(..., description="Calendar days to expiration")
     current_price: float = Field(..., description="Current stock price")
+    open_price: Optional[float] = Field(None, description="Day's opening price")
+    high_price: Optional[float] = Field(None, description="Day's high price")
+    low_price: Optional[float] = Field(None, description="Day's low price")
+    close_price: Optional[float] = Field(None, description="Previous close price")
     moneyness_pct: float = Field(..., description="Percentage distance from strike")
+    moneyness_label: str = Field(
+        ..., description="Human-readable moneyness (e.g. OTM by 3.7%)"
+    )
+    market_open: bool = Field(
+        False, description="Whether the US stock market is currently open"
+    )
     risk_level: str = Field(..., description="Risk level (LOW, MEDIUM, HIGH)")
     risk_icon: str = Field(..., description="Visual risk indicator")
     premium_collected: float = Field(..., description="Premium collected on trade")
@@ -131,7 +148,13 @@ class PositionSummaryResponse(BaseModel):
                 "expiration_date": "2026-02-15",
                 "dte_calendar": 14,
                 "current_price": 155.50,
+                "open_price": 154.00,
+                "high_price": 156.20,
+                "low_price": 153.80,
+                "close_price": 154.50,
                 "moneyness_pct": 3.67,
+                "moneyness_label": "OTM by 3.7%",
+                "market_open": True,
                 "risk_level": "LOW",
                 "risk_icon": "🟢",
                 "premium_collected": 250.0,

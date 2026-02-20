@@ -225,6 +225,15 @@ class PositionStatus:
     risk_level: str  # "LOW", "MEDIUM", "HIGH"
     risk_icon: str  # Visual indicator
 
+    # OHLC quote data (from Schwab API)
+    open_price: Optional[float] = None
+    high_price: Optional[float] = None
+    low_price: Optional[float] = None
+    close_price: Optional[float] = None
+
+    # Market state
+    market_open: bool = False
+
     # Metadata
     last_updated: datetime = field(default_factory=datetime.now)
     premium_collected: float = 0.0

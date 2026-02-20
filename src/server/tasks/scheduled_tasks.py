@@ -197,15 +197,11 @@ def risk_monitoring_task():
 
 @log_execution("opportunity_scanning", "Opportunity Scanning Task")
 def opportunity_scanning_task():
-    """Scan for new trading opportunities.
+    """Scan watchlist symbols for option-selling opportunities.
 
-    Runs daily at 9:45 AM ET to generate recommendations for all
-    active wheels. Filters for favorable setups based on:
-    - Current wheel state (cash or shares)
-    - Market volatility
-    - Risk/reward profile
-
-    Logs opportunities for review.
+    Runs 4x/day during market hours (10:00, 11:30, 13:00, 14:30 ET).
+    Scans all watchlist symbols across conservative and aggressive profiles
+    for both puts and calls, storing results in the opportunities table.
 
     Only runs if market is open.
     """
@@ -218,27 +214,15 @@ def opportunity_scanning_task():
     db = SessionLocal()
 
     try:
-        # Get repositories
-        wheel_repo = WheelRepository(db)
-        recommendation_service = RecommendationService(db)
+        from src.server.services.watchlist_service import WatchlistService
 
-        # Get all active wheels
-        # Note: We'd need to implement list_all_active_wheels in WheelRepository
-        # For now, we'll get wheels from all portfolios
-
-        opportunities_found = 0
-        warnings_found = 0
-
-        # This is a simplified implementation
-        # In production, we'd iterate through all portfolios and wheels
-        logger.info("Scanning for trading opportunities...")
-
-        # Get recommendations for known wheels
-        # (Implementation would iterate through all active wheels)
+        service = WatchlistService(db)
+        result = service.scan_all()
 
         logger.info(
-            f"Opportunity scanning complete: {opportunities_found} opportunities found, "
-            f"{warnings_found} warnings"
+            f"Opportunity scanning complete: {result['symbols_scanned']} symbols scanned, "
+            f"{result['opportunities_found']} opportunities found, "
+            f"{len(result['errors'])} errors"
         )
 
     except Exception as e:

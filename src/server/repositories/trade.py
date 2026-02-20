@@ -291,14 +291,14 @@ class TradeRepository:
         if trade.direction == "put":
             if price_at_expiry <= trade.strike:
                 # Put assigned - buyer exercises, we buy shares at strike
-                outcome = "expired_assigned"
+                outcome = "assigned"
             else:
                 # Put expired worthless - keep premium, no assignment
                 outcome = "expired_worthless"
         else:  # call
             if price_at_expiry >= trade.strike:
                 # Call called away - buyer exercises, we sell shares at strike
-                outcome = "expired_assigned"
+                outcome = "called_away"
             else:
                 # Call expired worthless - keep premium and shares
                 outcome = "expired_worthless"

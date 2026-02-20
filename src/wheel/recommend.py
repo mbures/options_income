@@ -92,6 +92,7 @@ class RecommendEngine:
         current_price: Optional[float] = None,
         volatility: Optional[float] = None,
         expiration_date: Optional[str] = None,
+        max_dte: int = 14,
     ) -> WheelRecommendation:
         """
         Generate a biased recommendation for the next trade.
@@ -141,6 +142,14 @@ class RecommendEngine:
         if volatility is None:
             volatility = self._estimate_volatility(position.symbol, current_price)
 
+        # Log market data context for diagnostics
+        logger.info(
+            "Recommendation inputs for %s: price=%.2f, volatility=%.2f, "
+            "direction=%s, profile=%s",
+            position.symbol, current_price, volatility,
+            direction, position.profile.value,
+        )
+
         # Get candidates within profile range
         candidates = self._get_candidates(
             options_chain=options_chain,
@@ -150,12 +159,16 @@ class RecommendEngine:
             profile=position.profile,
             expiration_date=expiration_date,
             position=position,
+            max_dte=max_dte,
         )
 
         if not candidates:
+            min_sigma, max_sigma = PROFILE_SIGMA_RANGES[position.profile]
             raise DataFetchError(
                 f"No suitable {direction} options found for {position.symbol} "
-                f"within {position.profile.value} profile range"
+                f"within {position.profile.value} profile range "
+                f"(sigma {min_sigma:.1f}-{max_sigma:.1f}, max DTE {max_dte}). "
+                f"Run with --verbose or check logs for filtering details."
             )
 
         # Apply bias: prefer further OTM + shorter DTE
@@ -226,6 +239,7 @@ class RecommendEngine:
         profile: StrikeProfile,
         expiration_date: Optional[str],
         position: WheelPosition,
+        max_dte: int = 14,
     ) -> list[WheelRecommendation]:
         """
         Get candidate options within the profile's sigma range.
@@ -234,42 +248,79 @@ class RecommendEngine:
         """
         candidates: list[WheelRecommendation] = []
 
+        # Diagnostic counters
+        skipped_itm = 0
+        skipped_no_bid = 0
+        skipped_expired = 0
+        skipped_sigma_calc = 0
+        skipped_sigma_range = 0
+        skipped_no_capital = 0
+
         # Get profile sigma range
         min_sigma, max_sigma = PROFILE_SIGMA_RANGES[profile]
 
         # Get contracts of the right type
         if direction == "put":
-            contracts = options_chain.get_puts()
+            all_contracts = options_chain.get_puts()
         else:
-            contracts = options_chain.get_calls()
+            all_contracts = options_chain.get_calls()
+
+        logger.info(
+            "Candidate search: %d total %s contracts in chain",
+            len(all_contracts), direction,
+        )
 
         # Filter by expiration if specified
         if expiration_date:
-            contracts = [c for c in contracts if c.expiration_date == expiration_date]
+            contracts = [c for c in all_contracts if c.expiration_date == expiration_date]
+            logger.info(
+                "Filtering to expiration %s: %d contracts",
+                expiration_date, len(contracts),
+            )
         else:
-            # Get available expirations and prefer shorter ones
-            expirations = sorted({c.expiration_date for c in contracts})
+            # Get available expirations and filter by max_dte window
+            expirations = sorted({c.expiration_date for c in all_contracts})
             if not expirations:
+                logger.info("No expirations found in %s chain", direction)
                 return []
 
-            # Filter to first few expirations (prefer shorter DTE)
-            target_expirations = expirations[:3]  # First 3 expirations
-            contracts = [c for c in contracts if c.expiration_date in target_expirations]
+            # Filter to expirations within max_dte days
+            target_expirations = [
+                exp for exp in expirations
+                if 0 < calculate_days_to_expiry(exp) <= max_dte
+            ]
+            if not target_expirations:
+                logger.info(
+                    "No expirations within %d-day window (available: %s)",
+                    max_dte, [str(e) for e in expirations[:5]],
+                )
+                return []
+
+            contracts = [c for c in all_contracts if c.expiration_date in target_expirations]
+            logger.info(
+                "Targeting expirations within %d days: %s (%d of %d available): %d contracts",
+                max_dte, [str(e) for e in target_expirations],
+                len(target_expirations), len(expirations), len(contracts),
+            )
 
         for contract in contracts:
             # Skip ITM options
             if direction == "call" and contract.strike <= current_price:
+                skipped_itm += 1
                 continue
             if direction == "put" and contract.strike >= current_price:
+                skipped_itm += 1
                 continue
 
             # Skip zero bid (no premium)
             if contract.bid is None or contract.bid <= 0:
+                skipped_no_bid += 1
                 continue
 
             # Calculate days to expiry
             dte = calculate_days_to_expiry(contract.expiration_date)
             if dte <= 0:
+                skipped_expired += 1
                 continue
 
             # Calculate sigma distance
@@ -282,10 +333,17 @@ class RecommendEngine:
                     option_type=direction,
                 )
             except (ValueError, ZeroDivisionError):
+                skipped_sigma_calc += 1
                 continue
 
             # Filter by profile range
             if sigma_distance < min_sigma or sigma_distance > max_sigma:
+                logger.debug(
+                    "Strike %.2f (exp %s): sigma=%.2f outside range [%.1f, %.1f]",
+                    contract.strike, contract.expiration_date,
+                    sigma_distance, min_sigma, max_sigma,
+                )
+                skipped_sigma_range += 1
                 continue
 
             # Calculate probability
@@ -308,6 +366,7 @@ class RecommendEngine:
                 contracts_available = position.contracts_from_shares
 
             if contracts_available <= 0:
+                skipped_no_capital += 1
                 continue
 
             # Calculate premium
@@ -342,6 +401,28 @@ class RecommendEngine:
                 ask=contract.ask if contract.ask else 0.0,
             )
             candidates.append(rec)
+
+        # Log filtering summary
+        total_evaluated = len(contracts)
+        logger.info(
+            "Candidate filtering for %s %ss (price=%.2f, sigma range=%.1f-%.1f): "
+            "%d evaluated -> %d candidates | "
+            "Rejected: %d ITM, %d no-bid, %d expired, %d sigma-calc-error, "
+            "%d outside-sigma-range, %d insufficient-capital",
+            position.symbol, direction, current_price, min_sigma, max_sigma,
+            total_evaluated, len(candidates),
+            skipped_itm, skipped_no_bid, skipped_expired,
+            skipped_sigma_calc, skipped_sigma_range, skipped_no_capital,
+        )
+        if candidates:
+            sigma_values = [c.sigma_distance for c in candidates]
+            logger.info(
+                "Accepted candidates: %d options, sigma range %.2f-%.2f, "
+                "strikes %s",
+                len(candidates),
+                min(sigma_values), max(sigma_values),
+                [c.strike for c in candidates],
+            )
 
         return candidates
 
@@ -413,6 +494,95 @@ class RecommendEngine:
                 c.warnings.append(
                     f"Short DTE ({c.dte} days) - limited time for adjustment"
                 )
+
+    def scan_opportunities(
+        self,
+        symbol: str,
+        profiles: list,
+        max_dte: int = 45,
+    ) -> list[WheelRecommendation]:
+        """Scan both puts and calls across given profiles for a symbol.
+
+        Fetches options chain + price ONCE, then loops over (direction, profile)
+        pairs using synthetic WheelPosition objects. Normalizes results to 1 contract.
+
+        Args:
+            symbol: Stock ticker symbol
+            profiles: List of StrikeProfile enums to scan
+            max_dte: Maximum days to expiration for search window
+
+        Returns:
+            List of WheelRecommendation sorted by bias_score descending.
+            Each recommendation is normalized to 1 contract.
+        """
+        # Fetch market data once
+        options_chain = self._fetch_options_chain(symbol)
+        current_price = self._fetch_current_price(symbol)
+        volatility = self._estimate_volatility(symbol, current_price)
+
+        all_candidates: list[WheelRecommendation] = []
+
+        for direction in ["put", "call"]:
+            for profile in profiles:
+                # Create synthetic position
+                if direction == "put":
+                    synthetic = WheelPosition(
+                        symbol=symbol,
+                        state=WheelState.CASH,
+                        capital_allocated=999_999_999,
+                        profile=profile,
+                    )
+                else:
+                    synthetic = WheelPosition(
+                        symbol=symbol,
+                        state=WheelState.SHARES,
+                        shares_held=100,
+                        profile=profile,
+                    )
+
+                try:
+                    candidates = self._get_candidates(
+                        options_chain=options_chain,
+                        current_price=current_price,
+                        volatility=volatility,
+                        direction=direction,
+                        profile=profile,
+                        expiration_date=None,
+                        position=synthetic,
+                        max_dte=max_dte,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "scan_opportunities failed for %s %s/%s: %s",
+                        symbol, direction, profile.value, e,
+                    )
+                    continue
+
+                # Normalize each candidate to 1 contract
+                for c in candidates:
+                    c.contracts = 1
+                    c.total_premium = c.premium_per_share * 100
+
+                    # Recalculate annualized yield for 1 contract
+                    if direction == "put":
+                        collateral = c.strike * 100
+                    else:
+                        collateral = current_price * 100
+                    if collateral > 0 and c.dte > 0:
+                        c.annualized_yield_pct = (
+                            c.total_premium / collateral
+                        ) * (365 / c.dte) * 100
+
+                all_candidates.extend(candidates)
+
+        if not all_candidates:
+            return []
+
+        # Apply collection bias scoring and sort
+        biased = self._apply_collection_bias(all_candidates)
+        self._add_warnings(biased, symbol)
+
+        return biased
 
     def get_multiple_recommendations(
         self,

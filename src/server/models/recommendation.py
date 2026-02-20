@@ -182,6 +182,7 @@ class BatchRecommendationRequest(BaseModel):
         None, description="Target expiration date"
     )
     profile: Optional[str] = Field(None, description="Override profile for all")
+    max_dte: int = Field(14, ge=1, le=90, description="Maximum days to expiration search window")
 
     @field_validator("symbols")
     @classmethod

@@ -12,15 +12,19 @@ Models:
     SchedulerConfig: Configuration for background scheduled tasks
     JobExecution: Execution history for scheduled background tasks
     PluginConfig: Configuration for dynamically loaded plugins
+    WatchlistItem: Symbol on the user's opportunity scanning watchlist
+    Opportunity: Scanned option-selling opportunity from watchlist scanner
 """
 
 from .job_execution import JobExecution
+from .opportunity import Opportunity
 from .performance import PerformanceMetrics
 from .plugin_config import PluginConfig
 from .portfolio import Portfolio
 from .scheduler import SchedulerConfig
 from .snapshot import Snapshot
 from .trade import Trade
+from .watchlist import WatchlistItem
 from .wheel import Wheel
 
 __all__ = [
@@ -32,4 +36,6 @@ __all__ = [
     "SchedulerConfig",
     "JobExecution",
     "PluginConfig",
+    "WatchlistItem",
+    "Opportunity",
 ]

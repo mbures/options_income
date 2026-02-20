@@ -135,9 +135,19 @@ def authorize(open_browser: bool = True) -> int:
 
         # Check if already authorized
         if coordinator.is_authorized():
-            logger.info("✅ Already authorized!")
             status = coordinator.get_status()
-            logger.info(f"   Token expires in {int(status['expires_in_seconds'])} seconds")
+            expires_in = int(status['expires_in_seconds'])
+
+            if expires_in <= 0:
+                # Access token expired - warn about potential refresh token expiry
+                logger.warning("⚠️  Access token has expired.")
+                logger.warning("   If the token was last refreshed more than 7 days ago,")
+                logger.warning("   the refresh token has also expired.")
+                logger.warning("   Use --revoke to re-authorize if API calls fail.")
+            else:
+                logger.info("✅ Already authorized!")
+                logger.info(f"   Token expires in {expires_in} seconds")
+
             logger.info("   Use --revoke to re-authorize")
             return 0
 

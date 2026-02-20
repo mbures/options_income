@@ -58,8 +58,28 @@ class PositionMonitorService:
         self.db = db
         self.wheel_repo = WheelRepository(db)
         self.trade_repo = TradeRepository(db)
+
+        # Auto-initialize Schwab client if not provided
+        if schwab_client:
+            self.schwab_client = schwab_client
+        else:
+            try:
+                self.schwab_client = SchwabClient()
+            except Exception as e:
+                logger.warning(f"Failed to initialize SchwabClient: {e}")
+                self.schwab_client = None
+
+        if price_fetcher:
+            self.price_fetcher = price_fetcher
+        else:
+            self.price_fetcher = (
+                SchwabPriceDataFetcher(self.schwab_client)
+                if self.schwab_client
+                else None
+            )
+
         self.monitor = PositionMonitor(
-            schwab_client=schwab_client, price_fetcher=price_fetcher
+            schwab_client=self.schwab_client, price_fetcher=self.price_fetcher
         )
 
     def get_position_status(
@@ -410,7 +430,13 @@ class PositionMonitorService:
             expiration_date=status.expiration_date,
             dte_calendar=status.dte_calendar,
             current_price=status.current_price,
+            open_price=status.open_price,
+            high_price=status.high_price,
+            low_price=status.low_price,
+            close_price=status.close_price,
             moneyness_pct=status.moneyness_pct,
+            moneyness_label=status.moneyness_label,
+            market_open=status.market_open,
             risk_level=status.risk_level,
             risk_icon=status.risk_icon,
             premium_collected=status.premium_collected,

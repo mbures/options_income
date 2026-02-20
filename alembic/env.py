@@ -26,6 +26,8 @@ from src.server.database.models import (
     Snapshot,
     PerformanceMetrics,
     SchedulerConfig,
+    WatchlistItem,
+    Opportunity,
 )
 
 # Set target_metadata to our Base metadata for autogenerate

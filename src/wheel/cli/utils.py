@@ -5,16 +5,47 @@ This module provides helper functions for formatting output,
 displaying data, and managing CLI context.
 """
 
+from typing import TYPE_CHECKING
+
 import click
 
 from ..models import WheelPerformance, WheelPosition, WheelRecommendation
 from ..state import TradeOutcome
 from ..models import TradeRecord, PositionStatus
 
+if TYPE_CHECKING:
+    from . import CLIContext
+
 
 def get_manager(ctx: click.Context):
-    """Get the WheelManager from context."""
-    return ctx.obj["manager"]
+    """Get the WheelManager from context.
+
+    Args:
+        ctx: Click context
+
+    Returns:
+        WheelManager instance
+    """
+    # Support both old dict-based and new CLIContext
+    if isinstance(ctx.obj, dict):
+        return ctx.obj["manager"]
+    else:
+        return ctx.obj.wheel_manager
+
+
+def get_cli_context(ctx: click.Context) -> "CLIContext":
+    """Get the CLIContext from context.
+
+    Args:
+        ctx: Click context
+
+    Returns:
+        CLIContext instance
+    """
+    if isinstance(ctx.obj, dict):
+        return ctx.obj["cli_context"]
+    else:
+        return ctx.obj
 
 
 def print_error(message: str) -> None:

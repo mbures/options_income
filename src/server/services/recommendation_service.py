@@ -5,11 +5,13 @@ using the RecommendEngine with API-friendly interfaces, caching, and error handl
 """
 
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from src.config import FinnhubConfig
 from src.market_data.finnhub_client import FinnhubClient
 from src.market_data.price_fetcher import SchwabPriceDataFetcher
 from src.models.profiles import StrikeProfile
@@ -67,7 +69,12 @@ class RecommendationService:
             else None
         )
         try:
-            self.finnhub_client = FinnhubClient()
+            finnhub_api_key = os.environ.get("FINNHUB_API_KEY", "")
+            if finnhub_api_key:
+                self.finnhub_client = FinnhubClient(FinnhubConfig(api_key=finnhub_api_key))
+            else:
+                logger.warning("FINNHUB_API_KEY not set, FinnhubClient disabled")
+                self.finnhub_client = None
         except Exception as e:
             logger.warning(f"Failed to initialize FinnhubClient: {e}")
             self.finnhub_client = None
@@ -90,6 +97,7 @@ class RecommendationService:
         wheel_id: int,
         expiration_date: Optional[str] = None,
         use_cache: bool = True,
+        max_dte: int = 14,
     ) -> RecommendationResponse:
         """Generate recommendation for a wheel position.
 
@@ -100,6 +108,7 @@ class RecommendationService:
             wheel_id: Wheel ID
             expiration_date: Optional target expiration date (YYYY-MM-DD)
             use_cache: Whether to use cached recommendations
+            max_dte: Maximum days to expiration for search window
 
         Returns:
             RecommendationResponse with trade recommendation
@@ -138,7 +147,8 @@ class RecommendationService:
         # Generate recommendation using RecommendEngine
         try:
             wheel_rec = self.recommend_engine.get_recommendation(
-                position=cli_position, expiration_date=expiration_date
+                position=cli_position, expiration_date=expiration_date,
+                max_dte=max_dte,
             )
         except Exception as e:
             logger.error(f"Failed to generate recommendation for wheel {wheel_id}: {e}")
@@ -159,6 +169,7 @@ class RecommendationService:
         symbols: list[str],
         expiration_date: Optional[str] = None,
         profile_override: Optional[str] = None,
+        max_dte: int = 14,
     ) -> tuple[list[RecommendationResponse], dict[str, str]]:
         """Generate recommendations for multiple symbols.
 
@@ -205,7 +216,8 @@ class RecommendationService:
 
                 # Get recommendation
                 rec = self.get_recommendation(
-                    wheel.id, expiration_date=expiration_date, use_cache=True
+                    wheel.id, expiration_date=expiration_date, use_cache=True,
+                    max_dte=max_dte,
                 )
                 recommendations.append(rec)
 

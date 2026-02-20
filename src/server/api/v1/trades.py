@@ -93,7 +93,7 @@ def list_wheel_trades(
     wheel_id: int,
     skip: int = 0,
     limit: int = 100,
-    outcome: Optional[str] = Query(None, description="Filter by outcome (open, expired_assigned, etc.)"),
+    outcome: Optional[str] = Query(None, description="Filter by outcome (open, assigned, called_away, expired_worthless, closed_early)"),
     db: Session = Depends(get_db),
 ) -> list[TradeResponse]:
     """List all trades for a wheel.

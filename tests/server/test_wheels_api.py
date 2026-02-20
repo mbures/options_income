@@ -170,6 +170,72 @@ class TestWheelCreate:
         )
         assert response.status_code == 422
 
+    def test_create_wheel_with_shares(self, client: TestClient, portfolio_id: str):
+        """Test creating a wheel starting with shares (sell calls mode)."""
+        response = client.post(
+            f"/api/v1/portfolios/{portfolio_id}/wheels",
+            json={
+                "symbol": "NVDA",
+                "shares": 3600,
+                "cost_basis": 120.0,
+                "state": "shares",
+                "profile": "moderate",
+            },
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["symbol"] == "NVDA"
+        assert data["state"] == "shares"
+        assert data["shares_held"] == 3600
+        assert data["cost_basis"] == 120.0
+        assert data["capital_allocated"] == 3600 * 120.0
+        assert data["is_active"] is True
+
+    def test_create_wheel_with_shares_no_state_defaults_to_shares(
+        self, client: TestClient, portfolio_id: str
+    ):
+        """Test that providing shares without explicit state defaults to 'shares'."""
+        response = client.post(
+            f"/api/v1/portfolios/{portfolio_id}/wheels",
+            json={
+                "symbol": "AAPL",
+                "shares": 100,
+                "cost_basis": 150.0,
+                "profile": "conservative",
+            },
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["state"] == "shares"
+        assert data["shares_held"] == 100
+        assert data["capital_allocated"] == 15000.0
+
+    def test_create_wheel_no_capital_no_shares_fails(
+        self, client: TestClient, portfolio_id: str
+    ):
+        """Test that omitting both capital and shares fails validation."""
+        response = client.post(
+            f"/api/v1/portfolios/{portfolio_id}/wheels",
+            json={
+                "symbol": "AAPL",
+                "profile": "conservative",
+            },
+        )
+        assert response.status_code == 422
+
+    def test_create_wheel_defensive_profile(self, client: TestClient, portfolio_id: str):
+        """Test creating a wheel with defensive profile."""
+        response = client.post(
+            f"/api/v1/portfolios/{portfolio_id}/wheels",
+            json={
+                "symbol": "MSFT",
+                "capital_allocated": 20000.0,
+                "profile": "defensive",
+            },
+        )
+        assert response.status_code == 201
+        assert response.json()["profile"] == "defensive"
+
 
 class TestWheelList:
     """Test cases for listing wheels."""

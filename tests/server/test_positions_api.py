@@ -96,19 +96,28 @@ def wheel_with_open_call(client: TestClient, portfolio_id: str, test_db) -> dict
 
 @pytest.fixture
 def mock_schwab_price():
-    """Mock Schwab client for price fetching."""
+    """Mock Schwab client for price and quote data fetching."""
     with patch(
-        "src.wheel.monitor.PositionMonitor._fetch_current_price"
-    ) as mock_fetch:
+        "src.wheel.monitor.PositionMonitor._fetch_quote_data"
+    ) as mock_quote, patch(
+        "src.server.tasks.market_hours.is_market_open", return_value=False
+    ):
         # Default: return prices >5% from strike for LOW risk
         # AAPL: 160.00 (6.67% above strike of 150.0)
         # MSFT: 200.00 (4.76% below strike of 210.0) = MEDIUM risk
         def side_effect(symbol, force_refresh=False):
             prices = {"AAPL": 160.00, "MSFT": 200.00, "GOOGL": 142.00}
-            return prices.get(symbol, 150.0)
+            price = prices.get(symbol, 150.0)
+            return {
+                "lastPrice": price,
+                "openPrice": price - 1.0,
+                "highPrice": price + 1.0,
+                "lowPrice": price - 2.0,
+                "closePrice": price - 0.5,
+            }
 
-        mock_fetch.side_effect = side_effect
-        yield mock_fetch
+        mock_quote.side_effect = side_effect
+        yield mock_quote
 
 
 class TestGetPositionStatus:
@@ -145,9 +154,17 @@ class TestGetPositionStatus:
 
         # Mock price below strike (ITM)
         with patch(
-            "src.wheel.monitor.PositionMonitor._fetch_current_price"
-        ) as mock_fetch:
-            mock_fetch.return_value = 145.0  # Below strike of 150.0
+            "src.wheel.monitor.PositionMonitor._fetch_quote_data"
+        ) as mock_quote, patch(
+            "src.server.tasks.market_hours.is_market_open", return_value=False
+        ):
+            mock_quote.return_value = {
+                "lastPrice": 145.0,
+                "openPrice": None,
+                "highPrice": None,
+                "lowPrice": None,
+                "closePrice": None,
+            }
 
             response = client.get(f"/api/v1/wheels/{wheel_id}/position")
             assert response.status_code == 200
@@ -168,9 +185,17 @@ class TestGetPositionStatus:
 
         # Mock price close to strike (3% OTM - within danger zone)
         with patch(
-            "src.wheel.monitor.PositionMonitor._fetch_current_price"
-        ) as mock_fetch:
-            mock_fetch.return_value = 154.0  # 2.67% above strike
+            "src.wheel.monitor.PositionMonitor._fetch_quote_data"
+        ) as mock_quote, patch(
+            "src.server.tasks.market_hours.is_market_open", return_value=False
+        ):
+            mock_quote.return_value = {
+                "lastPrice": 154.0,
+                "openPrice": None,
+                "highPrice": None,
+                "lowPrice": None,
+                "closePrice": None,
+            }
 
             response = client.get(f"/api/v1/wheels/{wheel_id}/position")
             assert response.status_code == 200
@@ -449,9 +474,17 @@ class TestGetRiskAssessment:
 
         # Mock ITM price
         with patch(
-            "src.wheel.monitor.PositionMonitor._fetch_current_price"
-        ) as mock_fetch:
-            mock_fetch.return_value = 145.0  # ITM
+            "src.wheel.monitor.PositionMonitor._fetch_quote_data"
+        ) as mock_quote, patch(
+            "src.server.tasks.market_hours.is_market_open", return_value=False
+        ):
+            mock_quote.return_value = {
+                "lastPrice": 145.0,
+                "openPrice": None,
+                "highPrice": None,
+                "lowPrice": None,
+                "closePrice": None,
+            }
 
             response = client.get(f"/api/v1/wheels/{wheel_id}/risk")
             assert response.status_code == 200
@@ -494,9 +527,17 @@ class TestPositionStatusFields:
         wheel_id = wheel_with_open_put["wheel"]["id"]
 
         with patch(
-            "src.wheel.monitor.PositionMonitor._fetch_current_price"
-        ) as mock_fetch:
-            mock_fetch.return_value = 155.0  # 3.33% above strike
+            "src.wheel.monitor.PositionMonitor._fetch_quote_data"
+        ) as mock_quote, patch(
+            "src.server.tasks.market_hours.is_market_open", return_value=False
+        ):
+            mock_quote.return_value = {
+                "lastPrice": 155.0,
+                "openPrice": None,
+                "highPrice": None,
+                "lowPrice": None,
+                "closePrice": None,
+            }
 
             response = client.get(f"/api/v1/wheels/{wheel_id}/position")
             data = response.json()
@@ -513,9 +554,17 @@ class TestPositionStatusFields:
         wheel_id = wheel_with_open_put["wheel"]["id"]
 
         with patch(
-            "src.wheel.monitor.PositionMonitor._fetch_current_price"
-        ) as mock_fetch:
-            mock_fetch.return_value = 145.0  # 3.33% below strike
+            "src.wheel.monitor.PositionMonitor._fetch_quote_data"
+        ) as mock_quote, patch(
+            "src.server.tasks.market_hours.is_market_open", return_value=False
+        ):
+            mock_quote.return_value = {
+                "lastPrice": 145.0,
+                "openPrice": None,
+                "highPrice": None,
+                "lowPrice": None,
+                "closePrice": None,
+            }
 
             response = client.get(f"/api/v1/wheels/{wheel_id}/position")
             data = response.json()

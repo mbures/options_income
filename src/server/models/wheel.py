@@ -7,27 +7,30 @@ including validation rules and examples.
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # Valid wheel strategy profiles
-VALID_PROFILES = ["conservative", "moderate", "aggressive"]
+VALID_PROFILES = ["conservative", "moderate", "aggressive", "defensive"]
+
+# Valid initial wheel states
+VALID_INITIAL_STATES = ["cash", "shares"]
 
 
 class WheelCreate(BaseModel):
     """Request schema for creating a wheel.
 
+    Supports two start modes:
+    - Cash mode: provide capital_allocated to start selling puts
+    - Shares mode: provide shares_held and cost_basis to start selling calls
+
     Attributes:
         symbol: Stock ticker symbol (uppercase alphanumeric)
-        capital_allocated: Amount of capital to allocate
+        capital_allocated: Amount of capital to allocate (required for cash start)
         profile: Strike selection profile
-
-    Example:
-        >>> WheelCreate(
-        >>>     symbol="AAPL",
-        >>>     capital_allocated=10000.0,
-        >>>     profile="conservative"
-        >>> )
+        shares_held: Number of shares held (required for shares start)
+        cost_basis: Average cost per share (required for shares start)
+        state: Initial wheel state ("cash" or "shares")
     """
 
     symbol: str = Field(
@@ -36,30 +39,34 @@ class WheelCreate(BaseModel):
         max_length=10,
         description="Stock ticker symbol",
     )
-    capital_allocated: float = Field(
-        ...,
+    capital_allocated: Optional[float] = Field(
+        None,
         gt=0,
         description="Amount of capital to allocate to this wheel",
     )
     profile: str = Field(
         ...,
-        description="Strike selection profile (conservative, moderate, aggressive)",
+        description="Strike selection profile",
+    )
+    shares: Optional[int] = Field(
+        None,
+        gt=0,
+        description="Number of shares held (for shares start mode)",
+    )
+    cost_basis: Optional[float] = Field(
+        None,
+        gt=0,
+        description="Average cost per share (for shares start mode)",
+    )
+    state: Optional[str] = Field(
+        None,
+        description="Initial wheel state (cash or shares)",
     )
 
     @field_validator("symbol")
     @classmethod
     def symbol_must_be_uppercase_alphanumeric(cls, v: str) -> str:
-        """Validate symbol is uppercase alphanumeric.
-
-        Args:
-            v: Symbol value to validate
-
-        Returns:
-            Uppercase symbol
-
-        Raises:
-            ValueError: If symbol contains invalid characters
-        """
+        """Validate symbol is uppercase alphanumeric."""
         v = v.upper().strip()
         if not v.replace(".", "").replace("-", "").isalnum():
             raise ValueError(
@@ -70,29 +77,67 @@ class WheelCreate(BaseModel):
     @field_validator("profile")
     @classmethod
     def profile_must_be_valid(cls, v: str) -> str:
-        """Validate profile is one of the valid options.
-
-        Args:
-            v: Profile value to validate
-
-        Returns:
-            Lowercase profile value
-
-        Raises:
-            ValueError: If profile is not in valid profiles list
-        """
+        """Validate profile is one of the valid options."""
         v = v.lower().strip()
         if v not in VALID_PROFILES:
             raise ValueError(f"Profile must be one of: {', '.join(VALID_PROFILES)}")
         return v
 
+    @field_validator("state")
+    @classmethod
+    def state_must_be_valid(cls, v: Optional[str]) -> Optional[str]:
+        """Validate initial state is one of the valid options."""
+        if v is not None:
+            v = v.lower().strip()
+            if v not in VALID_INITIAL_STATES:
+                raise ValueError(
+                    f"State must be one of: {', '.join(VALID_INITIAL_STATES)}"
+                )
+        return v
+
+    @model_validator(mode="after")
+    def validate_start_mode(self) -> "WheelCreate":
+        """Ensure either capital_allocated OR (shares + cost_basis) is provided.
+
+        When starting with shares, capital_allocated is computed as shares * cost_basis.
+        When starting with cash, state defaults to 'cash'.
+        """
+        has_capital = self.capital_allocated is not None
+        has_shares = self.shares is not None and self.cost_basis is not None
+
+        if not has_capital and not has_shares:
+            raise ValueError(
+                "Must provide either capital_allocated or both shares and cost_basis"
+            )
+
+        # If starting with shares, compute capital_allocated and default state
+        if has_shares and not has_capital:
+            self.capital_allocated = self.shares * self.cost_basis
+            if self.state is None:
+                self.state = "shares"
+
+        # Default state to cash if not set
+        if self.state is None:
+            self.state = "cash"
+
+        return self
+
     model_config = {
         "json_schema_extra": {
-            "example": {
-                "symbol": "AAPL",
-                "capital_allocated": 10000.0,
-                "profile": "conservative",
-            }
+            "examples": [
+                {
+                    "symbol": "AAPL",
+                    "capital_allocated": 10000.0,
+                    "profile": "conservative",
+                },
+                {
+                    "symbol": "NVDA",
+                    "shares": 3600,
+                    "cost_basis": 120.0,
+                    "state": "shares",
+                    "profile": "moderate",
+                },
+            ]
         }
     }
 

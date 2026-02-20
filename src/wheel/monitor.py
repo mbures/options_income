@@ -8,7 +8,7 @@ moneyness, risk assessment, and time decay metrics.
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from src.constants import CACHE_TTL_POSITION_STATUS_SECONDS
 from src.price_fetcher import SchwabPriceDataFetcher
@@ -56,7 +56,9 @@ class PositionMonitor:
         """
         self.schwab_client = schwab_client
         self.price_fetcher = price_fetcher
-        self._cache: Dict[str, Tuple[float, datetime]] = {}  # symbol -> (price, timestamp)
+        self._cache: Dict[str, Tuple[Dict[str, Any], datetime]] = (
+            {}
+        )  # symbol -> (quote_data, timestamp)
 
     def get_position_status(
         self,
@@ -84,10 +86,11 @@ class PositionMonitor:
                 f"(current state: {position.state.value})"
             )
 
-        # Fetch current price (respects 5-min cache unless force_refresh)
-        current_price = self._fetch_current_price(
+        # Fetch quote data (respects 5-min cache unless force_refresh)
+        quote_data = self._fetch_quote_data(
             position.symbol, force_refresh=force_refresh
         )
+        current_price = quote_data["lastPrice"]
 
         # Calculate time metrics
         dte_calendar = calculate_days_to_expiry(trade.expiration_date)
@@ -107,6 +110,11 @@ class PositionMonitor:
             is_itm=moneyness.is_itm,
         )
 
+        # Determine market state (lazy import to avoid circular dependency)
+        from src.server.tasks.market_hours import is_market_open
+
+        market_open = is_market_open()
+
         return PositionStatus(
             symbol=position.symbol,
             direction=trade.direction,
@@ -122,6 +130,11 @@ class PositionMonitor:
             moneyness_label=moneyness.label,
             risk_level=risk_level,
             risk_icon=risk_icon,
+            open_price=quote_data.get("openPrice"),
+            high_price=quote_data.get("highPrice"),
+            low_price=quote_data.get("lowPrice"),
+            close_price=quote_data.get("closePrice"),
+            market_open=market_open,
             last_updated=datetime.now(),
             premium_collected=trade.total_premium,
         )
@@ -202,9 +215,11 @@ class PositionMonitor:
 
     # Private helper methods
 
-    def _fetch_current_price(self, symbol: str, force_refresh: bool) -> float:
+    def _fetch_quote_data(
+        self, symbol: str, force_refresh: bool = False
+    ) -> Dict[str, Any]:
         """
-        Fetch current price using existing infrastructure.
+        Fetch quote data including OHLC using existing infrastructure.
 
         Respects 5-minute cache unless force_refresh=True.
 
@@ -213,55 +228,97 @@ class PositionMonitor:
             force_refresh: Bypass cache
 
         Returns:
-            Current price
+            Dict with keys: lastPrice, openPrice, highPrice, lowPrice, closePrice.
+            Only lastPrice is guaranteed; others may be None.
 
         Raises:
             ValueError: If no price data provider configured or price unavailable
         """
         # Check internal cache first (unless force refresh)
         if not force_refresh and symbol in self._cache:
-            price, timestamp = self._cache[symbol]
+            cached_data, timestamp = self._cache[symbol]
             age = (datetime.now() - timestamp).total_seconds()
             if age < CACHE_TTL_POSITION_STATUS_SECONDS:
-                logger.debug(f"Using cached price for {symbol}: ${price:.2f}")
-                return price
+                logger.debug(
+                    f"Using cached quote for {symbol}: "
+                    f"${cached_data.get('lastPrice', 0):.2f}"
+                )
+                return cached_data
 
-        # Fetch from provider (Schwab preferred, fallback to AlphaVantage)
-        price = None
+        # Fetch from provider (Schwab preferred, fallback to price fetcher)
+        quote_data: Optional[Dict[str, Any]] = None
 
         if self.schwab_client:
             try:
                 quote = self.schwab_client.get_quote(symbol)
-                # Try multiple price fields in order of preference
-                price = (
+                # Build quote data from Schwab response
+                last_price = (
                     quote.get("lastPrice")
                     or quote.get("closePrice")
-                    or quote.get("bidPrice")  # Fallback to bid if no last/close
+                    or quote.get("bidPrice")
                 )
-                if price:
-                    logger.debug(f"Fetched price from Schwab for {symbol}: ${price:.2f}")
+                if last_price:
+                    quote_data = {
+                        "lastPrice": last_price,
+                        "openPrice": quote.get("openPrice"),
+                        "highPrice": quote.get("highPrice"),
+                        "lowPrice": quote.get("lowPrice"),
+                        "closePrice": quote.get("closePrice"),
+                    }
+                    logger.debug(
+                        f"Fetched quote from Schwab for {symbol}: ${last_price:.2f}"
+                    )
             except Exception as e:
-                logger.warning(f"Failed to fetch price from Schwab for {symbol}: {e}")
+                logger.warning(f"Failed to fetch quote from Schwab for {symbol}: {e}")
 
-        if price is None and self.price_fetcher:
+        if quote_data is None and self.price_fetcher:
             try:
                 price = self.price_fetcher.get_current_price(symbol)
                 if price:
+                    # Fallback fetcher only provides current price, no OHLC
+                    quote_data = {
+                        "lastPrice": price,
+                        "openPrice": None,
+                        "highPrice": None,
+                        "lowPrice": None,
+                        "closePrice": None,
+                    }
                     logger.debug(
                         f"Fetched price from fallback fetcher for {symbol}: ${price:.2f}"
                     )
             except Exception as e:
-                logger.warning(f"Failed to fetch price from fallback for {symbol}: {e}")
+                logger.warning(
+                    f"Failed to fetch price from fallback for {symbol}: {e}"
+                )
 
-        if price is None:
+        if quote_data is None:
             raise ValueError(
                 f"Unable to fetch price for {symbol}. "
                 "No price data provider configured or price unavailable."
             )
 
         # Update cache
-        self._cache[symbol] = (price, datetime.now())
-        return price
+        self._cache[symbol] = (quote_data, datetime.now())
+        return quote_data
+
+    def _fetch_current_price(self, symbol: str, force_refresh: bool = False) -> float:
+        """
+        Fetch current price using existing infrastructure.
+
+        Convenience wrapper around _fetch_quote_data that returns just the price.
+
+        Args:
+            symbol: Stock ticker
+            force_refresh: Bypass cache
+
+        Returns:
+            Current price as float
+
+        Raises:
+            ValueError: If no price data provider configured or price unavailable
+        """
+        quote_data = self._fetch_quote_data(symbol, force_refresh=force_refresh)
+        return quote_data["lastPrice"]
 
     def _calculate_moneyness(
         self,

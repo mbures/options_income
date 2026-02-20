@@ -6,10 +6,12 @@ routers, and core endpoints.
 
 import logging
 from datetime import datetime
+from pathlib import Path
 
-from fastapi import FastAPI, status
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.server import __version__
 from src.server.api.v1.router import router as v1_router
@@ -128,28 +130,40 @@ async def health_check() -> HealthResponse:
     )
 
 
-@app.get(
-    "/",
-    status_code=status.HTTP_200_OK,
-    tags=["root"],
-    summary="Root endpoint",
-    description="Returns welcome message with API information",
-)
-async def root():
-    """Root endpoint.
+# Mount static files for the web client (production build)
+CLIENT_DIST = Path(__file__).resolve().parent.parent / "client" / "dist"
+if CLIENT_DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=CLIENT_DIST / "assets"), name="static-assets")
 
-    Provides basic API information and links to documentation.
+    @app.get("/", include_in_schema=False)
+    async def serve_client():
+        """Serve the web client index.html."""
+        return FileResponse(CLIENT_DIST / "index.html")
 
-    Returns:
-        Welcome message with API details
-    """
-    return {
-        "message": f"Welcome to {settings.app_name}",
-        "version": __version__,
-        "docs": "/docs",
-        "health": "/health",
-        "api": "/api/v1/info",
-    }
+    @app.get("/{path:path}", include_in_schema=False)
+    async def serve_client_fallback(request: Request, path: str):
+        """Serve static files or fall back to index.html for client-side routing."""
+        file_path = CLIENT_DIST / path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(CLIENT_DIST / "index.html")
+else:
+    @app.get(
+        "/",
+        status_code=status.HTTP_200_OK,
+        tags=["root"],
+        summary="Root endpoint",
+        description="Returns welcome message with API information",
+    )
+    async def root():
+        """Root endpoint when no client build is available."""
+        return {
+            "message": f"Welcome to {settings.app_name}",
+            "version": __version__,
+            "docs": "/docs",
+            "health": "/health",
+            "api": "/api/v1/info",
+        }
 
 
 # Error handlers

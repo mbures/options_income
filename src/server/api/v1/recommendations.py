@@ -36,6 +36,7 @@ def get_recommendation(
         None, description="Target expiration (YYYY-MM-DD)"
     ),
     use_cache: bool = Query(True, description="Use cached recommendations"),
+    max_dte: int = Query(14, description="Maximum days to expiration search window", ge=1, le=90),
     db: Session = Depends(get_db),
 ) -> RecommendationResponse:
     """Generate options recommendation for a wheel position.
@@ -71,7 +72,9 @@ def get_recommendation(
     """
     service = RecommendationService(db)
     try:
-        recommendation = service.get_recommendation(wheel_id, expiration_date, use_cache)
+        recommendation = service.get_recommendation(
+            wheel_id, expiration_date, use_cache, max_dte=max_dte
+        )
         logger.info(
             f"Generated recommendation for wheel {wheel_id}: "
             f"{recommendation.direction} @ ${recommendation.strike}"
@@ -130,6 +133,7 @@ def get_batch_recommendations(
         symbols=request.symbols,
         expiration_date=request.expiration_date,
         profile_override=request.profile,
+        max_dte=request.max_dte,
     )
 
     from datetime import datetime

@@ -370,7 +370,10 @@ class TestTaskRegistration:
         assert "price_refresh" in job_ids
         assert "risk_monitoring" in job_ids
         assert "daily_snapshot" in job_ids
-        assert "opportunity_scanning" in job_ids
+        assert "opportunity_scanning_1000" in job_ids
+        assert "opportunity_scanning_1130" in job_ids
+        assert "opportunity_scanning_1300" in job_ids
+        assert "opportunity_scanning_1430" in job_ids
 
         # Cleanup
         scheduler.shutdown(wait=False)
@@ -403,7 +406,7 @@ class TestTaskRegistration:
 
         # Register and then unregister
         register_core_tasks(scheduler)
-        assert len(scheduler.get_jobs()) == 4
+        assert len(scheduler.get_jobs()) == 7  # 3 core + 4 scanning jobs
 
         unregister_core_tasks(scheduler)
         assert len(scheduler.get_jobs()) == 0

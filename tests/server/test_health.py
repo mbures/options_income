@@ -32,31 +32,39 @@ def test_health_endpoint(client_no_db: TestClient):
 
 
 def test_root_endpoint(client_no_db: TestClient):
-    """Test GET / endpoint returns welcome message.
+    """Test GET / endpoint returns either the web client or JSON welcome.
+
+    When the web client is built (dist/ exists), root serves index.html.
+    Otherwise, it returns a JSON welcome message.
 
     Args:
         client_no_db: FastAPI test client without database mocking
 
     Asserts:
         - Response status code is 200
-        - Response contains welcome message
-        - Response contains version information
-        - Response contains links to documentation endpoints
+        - Response is either HTML (web client) or JSON (API welcome)
     """
     response = client_no_db.get("/")
 
     assert response.status_code == status.HTTP_200_OK
 
-    data = response.json()
-    assert "message" in data
-    assert "Wheel Strategy API" in data["message"]
-    assert "version" in data
-    assert "docs" in data
-    assert data["docs"] == "/docs"
-    assert "health" in data
-    assert data["health"] == "/health"
-    assert "api" in data
-    assert data["api"] == "/api/v1/info"
+    content_type = response.headers.get("content-type", "")
+
+    if "text/html" in content_type:
+        # Web client is built and being served
+        assert "<!DOCTYPE html>" in response.text or "<html" in response.text
+    else:
+        # No client build — JSON welcome message
+        data = response.json()
+        assert "message" in data
+        assert "Wheel Strategy API" in data["message"]
+        assert "version" in data
+        assert "docs" in data
+        assert data["docs"] == "/docs"
+        assert "health" in data
+        assert data["health"] == "/health"
+        assert "api" in data
+        assert data["api"] == "/api/v1/info"
 
 
 def test_api_v1_info_endpoint(client_no_db: TestClient):

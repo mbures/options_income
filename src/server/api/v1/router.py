@@ -10,11 +10,13 @@ from datetime import datetime
 from fastapi import APIRouter, status
 
 from src.server.api.v1 import (
+    performance,
     portfolios,
     positions,
     recommendations,
     scheduler,
     trades,
+    watchlist,
     wheels,
 )
 from src.server.config import settings
@@ -36,6 +38,8 @@ router.include_router(trades.router)
 router.include_router(recommendations.router)
 router.include_router(positions.router)
 router.include_router(scheduler.router)
+router.include_router(watchlist.router)
+router.include_router(performance.router)
 
 
 @router.get(

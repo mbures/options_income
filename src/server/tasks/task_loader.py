@@ -65,17 +65,24 @@ def register_core_tasks(scheduler: SchedulerService) -> None:
     )
     logger.info("Registered: Daily Snapshot Task (daily at 4:30 PM ET)")
 
-    # Opportunity Scanning Task - Daily at 9:45 AM ET
-    scheduler.add_job(
-        func=opportunity_scanning_task,
-        trigger="cron",
-        hour=9,
-        minute=45,
-        id="opportunity_scanning",
-        name="Opportunity Scanning Task",
-        replace_existing=True,
-    )
-    logger.info("Registered: Opportunity Scanning Task (daily at 9:45 AM ET)")
+    # Opportunity Scanning Tasks - 4x/day during market hours
+    scan_times = [
+        ("opportunity_scanning_1000", 10, 0, "10:00 AM ET"),
+        ("opportunity_scanning_1130", 11, 30, "11:30 AM ET"),
+        ("opportunity_scanning_1300", 13, 0, "1:00 PM ET"),
+        ("opportunity_scanning_1430", 14, 30, "2:30 PM ET"),
+    ]
+    for job_id, hour, minute, label in scan_times:
+        scheduler.add_job(
+            func=opportunity_scanning_task,
+            trigger="cron",
+            hour=hour,
+            minute=minute,
+            id=job_id,
+            name=f"Opportunity Scanning Task ({label})",
+            replace_existing=True,
+        )
+        logger.info(f"Registered: Opportunity Scanning Task ({label})")
 
     logger.info("All core scheduled tasks registered successfully")
 
@@ -95,7 +102,10 @@ def unregister_core_tasks(scheduler: SchedulerService) -> None:
         "price_refresh",
         "risk_monitoring",
         "daily_snapshot",
-        "opportunity_scanning",
+        "opportunity_scanning_1000",
+        "opportunity_scanning_1130",
+        "opportunity_scanning_1300",
+        "opportunity_scanning_1430",
     ]
 
     for task_id in task_ids:
