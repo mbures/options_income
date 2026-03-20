@@ -19,6 +19,7 @@ from src.server.tasks.market_hours import (
     should_run_task,
 )
 from src.server.tasks.scheduled_tasks import (
+    auto_expire_trades_task,
     daily_snapshot_task,
     opportunity_scanning_task,
     price_refresh_task,
@@ -406,10 +407,578 @@ class TestTaskRegistration:
 
         # Register and then unregister
         register_core_tasks(scheduler)
-        assert len(scheduler.get_jobs()) == 7  # 3 core + 4 scanning jobs
+        assert len(scheduler.get_jobs()) == 8  # 4 core + 4 scanning jobs
 
         unregister_core_tasks(scheduler)
         assert len(scheduler.get_jobs()) == 0
 
         # Cleanup
         scheduler.shutdown(wait=False)
+
+
+class TestAutoExpireTradesTask:
+    """Test cases for auto-expiration of trades past their expiration date."""
+
+    @patch("src.server.tasks.scheduled_tasks.get_session_factory")
+    @patch("src.server.tasks.scheduled_tasks.PositionMonitorService")
+    @patch("src.server.tasks.scheduled_tasks.WheelService")
+    @patch("src.server.tasks.scheduled_tasks.TradeRepository")
+    def test_no_expired_trades_is_noop(
+        self, mock_trade_repo_cls, mock_wheel_svc_cls, mock_pos_svc_cls,
+        mock_session_factory,
+    ):
+        """Test task does nothing when there are no expired trades."""
+        mock_db = MagicMock()
+        mock_session_factory.return_value = lambda: mock_db
+
+        mock_trade_repo = MagicMock()
+        mock_trade_repo.list_open_trades.return_value = []
+        mock_trade_repo_cls.return_value = mock_trade_repo
+
+        auto_expire_trades_task()
+
+        mock_wheel_svc_cls.return_value.expire_trade.assert_not_called()
+        mock_db.close.assert_called_once()
+
+    @patch("src.server.tasks.scheduled_tasks.datetime")
+    @patch("src.server.tasks.scheduled_tasks.get_session_factory")
+    @patch("src.server.tasks.scheduled_tasks.PositionMonitorService")
+    @patch("src.server.tasks.scheduled_tasks.WheelService")
+    @patch("src.server.tasks.scheduled_tasks.TradeRepository")
+    def test_skips_future_expiration_trades(
+        self, mock_trade_repo_cls, mock_wheel_svc_cls, mock_pos_svc_cls,
+        mock_session_factory, mock_datetime,
+    ):
+        """Test task only processes trades past expiration, not future ones."""
+        mock_db = MagicMock()
+        mock_session_factory.return_value = lambda: mock_db
+        mock_datetime.utcnow.return_value = datetime(2026, 2, 21)
+
+        # Trade expiring in the future
+        future_trade = MagicMock()
+        future_trade.expiration_date = "2026-03-15"
+        future_trade.symbol = "AAPL"
+
+        mock_trade_repo = MagicMock()
+        mock_trade_repo.list_open_trades.return_value = [future_trade]
+        mock_trade_repo_cls.return_value = mock_trade_repo
+
+        auto_expire_trades_task()
+
+        mock_wheel_svc_cls.return_value.expire_trade.assert_not_called()
+
+    @patch("src.server.tasks.scheduled_tasks.datetime")
+    @patch("src.server.tasks.scheduled_tasks.get_session_factory")
+    @patch("src.server.tasks.scheduled_tasks.PositionMonitorService")
+    @patch("src.server.tasks.scheduled_tasks.WheelService")
+    @patch("src.server.tasks.scheduled_tasks.TradeRepository")
+    def test_expired_put_otm_expires_worthless(
+        self, mock_trade_repo_cls, mock_wheel_svc_cls, mock_pos_svc_cls,
+        mock_session_factory, mock_datetime,
+    ):
+        """Test expired put OTM results in expired_worthless outcome."""
+        mock_db = MagicMock()
+        mock_session_factory.return_value = lambda: mock_db
+        mock_datetime.utcnow.return_value = datetime(2026, 2, 21)
+
+        # RKLB PUT $61, price $76.58 -> OTM, expired worthless
+        trade = MagicMock()
+        trade.id = 1
+        trade.symbol = "RKLB"
+        trade.direction = "put"
+        trade.strike = 61.0
+        trade.expiration_date = "2026-02-20"
+
+        mock_trade_repo = MagicMock()
+        mock_trade_repo.list_open_trades.return_value = [trade]
+        mock_trade_repo_cls.return_value = mock_trade_repo
+
+        # Mock price fetch
+        mock_monitor = MagicMock()
+        mock_monitor._fetch_quote_data.return_value = {"lastPrice": 76.58}
+        mock_pos_svc = MagicMock()
+        mock_pos_svc.monitor = mock_monitor
+        mock_pos_svc_cls.return_value = mock_pos_svc
+
+        # Mock expire result
+        mock_result = MagicMock()
+        mock_result.outcome = "expired_worthless"
+        mock_wheel_svc = MagicMock()
+        mock_wheel_svc.expire_trade.return_value = mock_result
+        mock_wheel_svc_cls.return_value = mock_wheel_svc
+
+        auto_expire_trades_task()
+
+        from src.server.models.trade import TradeExpireRequest
+
+        mock_wheel_svc.expire_trade.assert_called_once_with(
+            1, TradeExpireRequest(price_at_expiry=76.58)
+        )
+
+    @patch("src.server.tasks.scheduled_tasks.datetime")
+    @patch("src.server.tasks.scheduled_tasks.get_session_factory")
+    @patch("src.server.tasks.scheduled_tasks.PositionMonitorService")
+    @patch("src.server.tasks.scheduled_tasks.WheelService")
+    @patch("src.server.tasks.scheduled_tasks.TradeRepository")
+    def test_expired_call_itm_called_away(
+        self, mock_trade_repo_cls, mock_wheel_svc_cls, mock_pos_svc_cls,
+        mock_session_factory, mock_datetime,
+    ):
+        """Test expired call ITM results in called_away outcome."""
+        mock_db = MagicMock()
+        mock_session_factory.return_value = lambda: mock_db
+        mock_datetime.utcnow.return_value = datetime(2026, 2, 21)
+
+        # NVDA CALL $190, price $190.33 -> ITM, called away
+        trade = MagicMock()
+        trade.id = 2
+        trade.symbol = "NVDA"
+        trade.direction = "call"
+        trade.strike = 190.0
+        trade.expiration_date = "2026-02-20"
+
+        mock_trade_repo = MagicMock()
+        mock_trade_repo.list_open_trades.return_value = [trade]
+        mock_trade_repo_cls.return_value = mock_trade_repo
+
+        mock_monitor = MagicMock()
+        mock_monitor._fetch_quote_data.return_value = {"lastPrice": 190.33}
+        mock_pos_svc = MagicMock()
+        mock_pos_svc.monitor = mock_monitor
+        mock_pos_svc_cls.return_value = mock_pos_svc
+
+        mock_result = MagicMock()
+        mock_result.outcome = "called_away"
+        mock_wheel_svc = MagicMock()
+        mock_wheel_svc.expire_trade.return_value = mock_result
+        mock_wheel_svc_cls.return_value = mock_wheel_svc
+
+        auto_expire_trades_task()
+
+        from src.server.models.trade import TradeExpireRequest
+
+        mock_wheel_svc.expire_trade.assert_called_once_with(
+            2, TradeExpireRequest(price_at_expiry=190.33)
+        )
+
+    @patch("src.server.tasks.scheduled_tasks.datetime")
+    @patch("src.server.tasks.scheduled_tasks.get_session_factory")
+    @patch("src.server.tasks.scheduled_tasks.PositionMonitorService")
+    @patch("src.server.tasks.scheduled_tasks.WheelService")
+    @patch("src.server.tasks.scheduled_tasks.TradeRepository")
+    def test_expired_put_itm_assigned(
+        self, mock_trade_repo_cls, mock_wheel_svc_cls, mock_pos_svc_cls,
+        mock_session_factory, mock_datetime,
+    ):
+        """Test expired put ITM results in assigned outcome."""
+        mock_db = MagicMock()
+        mock_session_factory.return_value = lambda: mock_db
+        mock_datetime.utcnow.return_value = datetime(2026, 2, 21)
+
+        # PUT $150, price $145 -> ITM, assigned
+        trade = MagicMock()
+        trade.id = 3
+        trade.symbol = "AAPL"
+        trade.direction = "put"
+        trade.strike = 150.0
+        trade.expiration_date = "2026-02-20"
+
+        mock_trade_repo = MagicMock()
+        mock_trade_repo.list_open_trades.return_value = [trade]
+        mock_trade_repo_cls.return_value = mock_trade_repo
+
+        mock_monitor = MagicMock()
+        mock_monitor._fetch_quote_data.return_value = {"lastPrice": 145.0}
+        mock_pos_svc = MagicMock()
+        mock_pos_svc.monitor = mock_monitor
+        mock_pos_svc_cls.return_value = mock_pos_svc
+
+        mock_result = MagicMock()
+        mock_result.outcome = "assigned"
+        mock_wheel_svc = MagicMock()
+        mock_wheel_svc.expire_trade.return_value = mock_result
+        mock_wheel_svc_cls.return_value = mock_wheel_svc
+
+        auto_expire_trades_task()
+
+        from src.server.models.trade import TradeExpireRequest
+
+        mock_wheel_svc.expire_trade.assert_called_once_with(
+            3, TradeExpireRequest(price_at_expiry=145.0)
+        )
+
+    @patch("src.server.tasks.scheduled_tasks.datetime")
+    @patch("src.server.tasks.scheduled_tasks.get_session_factory")
+    @patch("src.server.tasks.scheduled_tasks.PositionMonitorService")
+    @patch("src.server.tasks.scheduled_tasks.WheelService")
+    @patch("src.server.tasks.scheduled_tasks.TradeRepository")
+    def test_price_fetch_failure_skips_trade(
+        self, mock_trade_repo_cls, mock_wheel_svc_cls, mock_pos_svc_cls,
+        mock_session_factory, mock_datetime,
+    ):
+        """Test that price fetch failure skips the trade without crashing."""
+        mock_db = MagicMock()
+        mock_session_factory.return_value = lambda: mock_db
+        mock_datetime.utcnow.return_value = datetime(2026, 2, 21)
+
+        # Two expired trades - first will fail price fetch, second should succeed
+        trade1 = MagicMock()
+        trade1.id = 1
+        trade1.symbol = "BADTICKER"
+        trade1.direction = "put"
+        trade1.strike = 100.0
+        trade1.expiration_date = "2026-02-20"
+
+        trade2 = MagicMock()
+        trade2.id = 2
+        trade2.symbol = "AAPL"
+        trade2.direction = "put"
+        trade2.strike = 150.0
+        trade2.expiration_date = "2026-02-20"
+
+        mock_trade_repo = MagicMock()
+        mock_trade_repo.list_open_trades.return_value = [trade1, trade2]
+        mock_trade_repo_cls.return_value = mock_trade_repo
+
+        # First call raises, second succeeds
+        mock_monitor = MagicMock()
+        mock_monitor._fetch_quote_data.side_effect = [
+            ValueError("No price data available"),
+            {"lastPrice": 145.0},
+        ]
+        mock_pos_svc = MagicMock()
+        mock_pos_svc.monitor = mock_monitor
+        mock_pos_svc_cls.return_value = mock_pos_svc
+
+        mock_result = MagicMock()
+        mock_result.outcome = "assigned"
+        mock_wheel_svc = MagicMock()
+        mock_wheel_svc.expire_trade.return_value = mock_result
+        mock_wheel_svc_cls.return_value = mock_wheel_svc
+
+        # Should not raise
+        auto_expire_trades_task()
+
+        # Only the second trade should have been expired
+        mock_wheel_svc.expire_trade.assert_called_once()
+
+    @patch("src.server.tasks.scheduled_tasks.datetime")
+    @patch("src.server.tasks.scheduled_tasks.get_session_factory")
+    @patch("src.server.tasks.scheduled_tasks.PositionMonitorService")
+    @patch("src.server.tasks.scheduled_tasks.WheelService")
+    @patch("src.server.tasks.scheduled_tasks.TradeRepository")
+    def test_call_itm_intraday_high_triggers_exercise(
+        self, mock_trade_repo_cls, mock_wheel_svc_cls, mock_pos_svc_cls,
+        mock_session_factory, mock_datetime,
+    ):
+        """Test call ITM via highPrice (closed OTM) still gets called_away."""
+        mock_db = MagicMock()
+        mock_session_factory.return_value = lambda: mock_db
+        mock_datetime.utcnow.return_value = datetime(2026, 2, 21)
+
+        # NVDA CALL $190, lastPrice $188 (OTM), but highPrice $192 (was ITM)
+        trade = MagicMock()
+        trade.id = 1
+        trade.symbol = "NVDA"
+        trade.direction = "call"
+        trade.strike = 190.0
+        trade.expiration_date = "2026-02-20"
+
+        mock_trade_repo = MagicMock()
+        mock_trade_repo.list_open_trades.return_value = [trade]
+        mock_trade_repo_cls.return_value = mock_trade_repo
+
+        mock_monitor = MagicMock()
+        mock_monitor._fetch_quote_data.return_value = {
+            "lastPrice": 188.0,
+            "highPrice": 192.0,
+            "lowPrice": 185.0,
+        }
+        mock_pos_svc = MagicMock()
+        mock_pos_svc.monitor = mock_monitor
+        mock_pos_svc_cls.return_value = mock_pos_svc
+
+        mock_result = MagicMock()
+        mock_result.outcome = "called_away"
+        mock_wheel_svc = MagicMock()
+        mock_wheel_svc.expire_trade.return_value = mock_result
+        mock_wheel_svc_cls.return_value = mock_wheel_svc
+
+        auto_expire_trades_task()
+
+        from src.server.models.trade import TradeExpireRequest
+
+        mock_wheel_svc.expire_trade.assert_called_once_with(
+            1, TradeExpireRequest(price_at_expiry=192.0)
+        )
+
+    @patch("src.server.tasks.scheduled_tasks.datetime")
+    @patch("src.server.tasks.scheduled_tasks.get_session_factory")
+    @patch("src.server.tasks.scheduled_tasks.PositionMonitorService")
+    @patch("src.server.tasks.scheduled_tasks.WheelService")
+    @patch("src.server.tasks.scheduled_tasks.TradeRepository")
+    def test_put_itm_intraday_low_triggers_assignment(
+        self, mock_trade_repo_cls, mock_wheel_svc_cls, mock_pos_svc_cls,
+        mock_session_factory, mock_datetime,
+    ):
+        """Test put ITM via lowPrice (closed OTM) still gets assigned."""
+        mock_db = MagicMock()
+        mock_session_factory.return_value = lambda: mock_db
+        mock_datetime.utcnow.return_value = datetime(2026, 2, 21)
+
+        # AAPL PUT $150, lastPrice $152 (OTM), but lowPrice $148 (was ITM)
+        trade = MagicMock()
+        trade.id = 1
+        trade.symbol = "AAPL"
+        trade.direction = "put"
+        trade.strike = 150.0
+        trade.expiration_date = "2026-02-20"
+
+        mock_trade_repo = MagicMock()
+        mock_trade_repo.list_open_trades.return_value = [trade]
+        mock_trade_repo_cls.return_value = mock_trade_repo
+
+        mock_monitor = MagicMock()
+        mock_monitor._fetch_quote_data.return_value = {
+            "lastPrice": 152.0,
+            "highPrice": 155.0,
+            "lowPrice": 148.0,
+        }
+        mock_pos_svc = MagicMock()
+        mock_pos_svc.monitor = mock_monitor
+        mock_pos_svc_cls.return_value = mock_pos_svc
+
+        mock_result = MagicMock()
+        mock_result.outcome = "assigned"
+        mock_wheel_svc = MagicMock()
+        mock_wheel_svc.expire_trade.return_value = mock_result
+        mock_wheel_svc_cls.return_value = mock_wheel_svc
+
+        auto_expire_trades_task()
+
+        from src.server.models.trade import TradeExpireRequest
+
+        mock_wheel_svc.expire_trade.assert_called_once_with(
+            1, TradeExpireRequest(price_at_expiry=148.0)
+        )
+
+    @patch("src.server.tasks.scheduled_tasks.datetime")
+    @patch("src.server.tasks.scheduled_tasks.get_session_factory")
+    @patch("src.server.tasks.scheduled_tasks.PositionMonitorService")
+    @patch("src.server.tasks.scheduled_tasks.WheelService")
+    @patch("src.server.tasks.scheduled_tasks.TradeRepository")
+    def test_falls_back_to_last_price_when_high_low_unavailable(
+        self, mock_trade_repo_cls, mock_wheel_svc_cls, mock_pos_svc_cls,
+        mock_session_factory, mock_datetime,
+    ):
+        """Test falls back to lastPrice when highPrice/lowPrice are None."""
+        mock_db = MagicMock()
+        mock_session_factory.return_value = lambda: mock_db
+        mock_datetime.utcnow.return_value = datetime(2026, 2, 21)
+
+        trade = MagicMock()
+        trade.id = 1
+        trade.symbol = "AAPL"
+        trade.direction = "call"
+        trade.strike = 150.0
+        trade.expiration_date = "2026-02-20"
+
+        mock_trade_repo = MagicMock()
+        mock_trade_repo.list_open_trades.return_value = [trade]
+        mock_trade_repo_cls.return_value = mock_trade_repo
+
+        mock_monitor = MagicMock()
+        mock_monitor._fetch_quote_data.return_value = {
+            "lastPrice": 155.0,
+        }
+        mock_pos_svc = MagicMock()
+        mock_pos_svc.monitor = mock_monitor
+        mock_pos_svc_cls.return_value = mock_pos_svc
+
+        mock_result = MagicMock()
+        mock_result.outcome = "called_away"
+        mock_wheel_svc = MagicMock()
+        mock_wheel_svc.expire_trade.return_value = mock_result
+        mock_wheel_svc_cls.return_value = mock_wheel_svc
+
+        auto_expire_trades_task()
+
+        from src.server.models.trade import TradeExpireRequest
+
+        mock_wheel_svc.expire_trade.assert_called_once_with(
+            1, TradeExpireRequest(price_at_expiry=155.0)
+        )
+
+
+class TestPriceRefreshIntradayExercise:
+    """Test cases for intraday ITM auto-exercise in price refresh task."""
+
+    @patch("src.server.tasks.scheduled_tasks.is_market_open")
+    @patch("src.server.tasks.scheduled_tasks.get_session_factory")
+    @patch("src.server.tasks.scheduled_tasks.PositionMonitorService")
+    @patch("src.server.tasks.scheduled_tasks.WheelService")
+    def test_itm_put_triggers_auto_exercise(
+        self, mock_wheel_svc_cls, mock_service_class, mock_session_factory,
+        mock_market_open,
+    ):
+        """Test ITM put position triggers auto-exercise at current price."""
+        mock_market_open.return_value = True
+        mock_db = MagicMock()
+        mock_session_factory.return_value = lambda: mock_db
+
+        # ITM put: current_price ($145) <= strike ($150)
+        mock_position = MagicMock()
+        mock_position.trade_id = 1
+        mock_position.symbol = "AAPL"
+        mock_position.direction = "put"
+        mock_position.strike = 150.0
+        mock_position.current_price = 145.0
+
+        mock_result = MagicMock()
+        mock_result.total_count = 1
+        mock_result.high_risk_count = 1
+        mock_result.positions = [mock_position]
+
+        mock_service = MagicMock()
+        mock_service.get_all_open_positions.return_value = mock_result
+        mock_service_class.return_value = mock_service
+
+        mock_wheel_svc = MagicMock()
+        mock_wheel_svc_cls.return_value = mock_wheel_svc
+
+        price_refresh_task()
+
+        from src.server.models.trade import TradeExpireRequest
+
+        mock_wheel_svc.expire_trade.assert_called_once_with(
+            1, TradeExpireRequest(price_at_expiry=145.0)
+        )
+
+    @patch("src.server.tasks.scheduled_tasks.is_market_open")
+    @patch("src.server.tasks.scheduled_tasks.get_session_factory")
+    @patch("src.server.tasks.scheduled_tasks.PositionMonitorService")
+    @patch("src.server.tasks.scheduled_tasks.WheelService")
+    def test_itm_call_triggers_auto_exercise(
+        self, mock_wheel_svc_cls, mock_service_class, mock_session_factory,
+        mock_market_open,
+    ):
+        """Test ITM call position triggers auto-exercise at current price."""
+        mock_market_open.return_value = True
+        mock_db = MagicMock()
+        mock_session_factory.return_value = lambda: mock_db
+
+        # ITM call: current_price ($195) >= strike ($190)
+        mock_position = MagicMock()
+        mock_position.trade_id = 2
+        mock_position.symbol = "NVDA"
+        mock_position.direction = "call"
+        mock_position.strike = 190.0
+        mock_position.current_price = 195.0
+
+        mock_result = MagicMock()
+        mock_result.total_count = 1
+        mock_result.high_risk_count = 1
+        mock_result.positions = [mock_position]
+
+        mock_service = MagicMock()
+        mock_service.get_all_open_positions.return_value = mock_result
+        mock_service_class.return_value = mock_service
+
+        mock_wheel_svc = MagicMock()
+        mock_wheel_svc_cls.return_value = mock_wheel_svc
+
+        price_refresh_task()
+
+        from src.server.models.trade import TradeExpireRequest
+
+        mock_wheel_svc.expire_trade.assert_called_once_with(
+            2, TradeExpireRequest(price_at_expiry=195.0)
+        )
+
+    @patch("src.server.tasks.scheduled_tasks.is_market_open")
+    @patch("src.server.tasks.scheduled_tasks.get_session_factory")
+    @patch("src.server.tasks.scheduled_tasks.PositionMonitorService")
+    @patch("src.server.tasks.scheduled_tasks.WheelService")
+    def test_otm_position_not_exercised(
+        self, mock_wheel_svc_cls, mock_service_class, mock_session_factory,
+        mock_market_open,
+    ):
+        """Test OTM position is not auto-exercised."""
+        mock_market_open.return_value = True
+        mock_db = MagicMock()
+        mock_session_factory.return_value = lambda: mock_db
+
+        # OTM put: current_price ($155) > strike ($150)
+        mock_position = MagicMock()
+        mock_position.trade_id = 1
+        mock_position.symbol = "AAPL"
+        mock_position.direction = "put"
+        mock_position.strike = 150.0
+        mock_position.current_price = 155.0
+
+        mock_result = MagicMock()
+        mock_result.total_count = 1
+        mock_result.high_risk_count = 0
+        mock_result.positions = [mock_position]
+
+        mock_service = MagicMock()
+        mock_service.get_all_open_positions.return_value = mock_result
+        mock_service_class.return_value = mock_service
+
+        mock_wheel_svc = MagicMock()
+        mock_wheel_svc_cls.return_value = mock_wheel_svc
+
+        price_refresh_task()
+
+        mock_wheel_svc.expire_trade.assert_not_called()
+
+    @patch("src.server.tasks.scheduled_tasks.is_market_open")
+    @patch("src.server.tasks.scheduled_tasks.get_session_factory")
+    @patch("src.server.tasks.scheduled_tasks.PositionMonitorService")
+    @patch("src.server.tasks.scheduled_tasks.WheelService")
+    def test_exercise_failure_does_not_block_others(
+        self, mock_wheel_svc_cls, mock_service_class, mock_session_factory,
+        mock_market_open,
+    ):
+        """Test exercise failure on one position doesn't block others."""
+        mock_market_open.return_value = True
+        mock_db = MagicMock()
+        mock_session_factory.return_value = lambda: mock_db
+
+        # Two ITM puts
+        position1 = MagicMock()
+        position1.trade_id = 1
+        position1.symbol = "AAPL"
+        position1.direction = "put"
+        position1.strike = 150.0
+        position1.current_price = 145.0
+
+        position2 = MagicMock()
+        position2.trade_id = 2
+        position2.symbol = "MSFT"
+        position2.direction = "put"
+        position2.strike = 400.0
+        position2.current_price = 390.0
+
+        mock_result = MagicMock()
+        mock_result.total_count = 2
+        mock_result.high_risk_count = 2
+        mock_result.positions = [position1, position2]
+
+        mock_service = MagicMock()
+        mock_service.get_all_open_positions.return_value = mock_result
+        mock_service_class.return_value = mock_service
+
+        # First expire fails, second succeeds
+        mock_wheel_svc = MagicMock()
+        mock_wheel_svc.expire_trade.side_effect = [
+            Exception("DB error"),
+            MagicMock(),
+        ]
+        mock_wheel_svc_cls.return_value = mock_wheel_svc
+
+        # Should not raise
+        price_refresh_task()
+
+        # Both should have been attempted
+        assert mock_wheel_svc.expire_trade.call_count == 2

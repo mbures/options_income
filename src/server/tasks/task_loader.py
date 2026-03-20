@@ -8,6 +8,7 @@ import logging
 
 from src.server.services.scheduler_service import SchedulerService
 from src.server.tasks.scheduled_tasks import (
+    auto_expire_trades_task,
     daily_snapshot_task,
     opportunity_scanning_task,
     price_refresh_task,
@@ -52,6 +53,18 @@ def register_core_tasks(scheduler: SchedulerService) -> None:
         replace_existing=True,
     )
     logger.info("Registered: Risk Monitoring Task (every 15 minutes)")
+
+    # Auto Expiration Task - Daily at 4:15 PM ET (before snapshot)
+    scheduler.add_job(
+        func=auto_expire_trades_task,
+        trigger="cron",
+        hour=16,
+        minute=15,
+        id="auto_expire_trades",
+        name="Auto Expiration Task",
+        replace_existing=True,
+    )
+    logger.info("Registered: Auto Expiration Task (daily at 4:15 PM ET)")
 
     # Daily Snapshot Task - Daily at 4:30 PM ET
     scheduler.add_job(
@@ -101,6 +114,7 @@ def unregister_core_tasks(scheduler: SchedulerService) -> None:
     task_ids = [
         "price_refresh",
         "risk_monitoring",
+        "auto_expire_trades",
         "daily_snapshot",
         "opportunity_scanning_1000",
         "opportunity_scanning_1130",

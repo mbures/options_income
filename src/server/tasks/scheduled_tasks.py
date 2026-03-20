@@ -15,10 +15,12 @@ from sqlalchemy.orm import Session
 
 from src.server.database.models.snapshot import Snapshot
 from src.server.database.session import get_session_factory
+from src.server.models.trade import TradeExpireRequest
 from src.server.repositories.trade import TradeRepository
 from src.server.repositories.wheel import WheelRepository
 from src.server.services.position_service import PositionMonitorService
 from src.server.services.recommendation_service import RecommendationService
+from src.server.services.wheel_service import WheelService
 from src.server.tasks.execution_logger import log_execution
 from src.server.tasks.market_hours import is_market_open
 
@@ -53,6 +55,39 @@ def price_refresh_task():
             f"Price refresh complete: {result.total_count} positions updated, "
             f"{result.high_risk_count} high risk"
         )
+
+        # Worst-case ITM auto-exercise: if any position is currently ITM,
+        # assume early exercise for conservative performance tracking
+        wheel_service = WheelService(db)
+        exercised_count = 0
+
+        for position in result.positions:
+            is_itm = False
+            if position.direction == "put" and position.current_price <= position.strike:
+                is_itm = True
+            elif position.direction == "call" and position.current_price >= position.strike:
+                is_itm = True
+
+            if is_itm:
+                try:
+                    wheel_service.expire_trade(
+                        position.trade_id,
+                        TradeExpireRequest(price_at_expiry=position.current_price),
+                    )
+                    logger.info(
+                        f"Auto-exercised trade {position.trade_id}: "
+                        f"{position.symbol} {position.direction} "
+                        f"${position.strike} (intraday ITM at ${position.current_price:.2f})"
+                    )
+                    exercised_count += 1
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to auto-exercise trade {position.trade_id} "
+                        f"({position.symbol}): {e}"
+                    )
+
+        if exercised_count > 0:
+            logger.info(f"Intraday ITM auto-exercise: {exercised_count} trades exercised")
 
     except Exception as e:
         logger.error(f"Price refresh task failed: {e}", exc_info=True)
@@ -227,5 +262,81 @@ def opportunity_scanning_task():
 
     except Exception as e:
         logger.error(f"Opportunity scanning task failed: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+@log_execution("auto_expire_trades", "Auto Expiration Task")
+def auto_expire_trades_task():
+    """Automatically expire trades past their expiration date.
+
+    Runs daily after market close. Finds all open trades where the
+    expiration date has passed, fetches the closing price, and expires
+    them using WheelService.expire_trade() which handles outcome
+    determination and state transitions.
+
+    Not gated on is_market_open() because it needs to run after close
+    and catch up on weekends/holidays.
+    """
+    logger.info("Starting auto-expiration task")
+    SessionLocal = get_session_factory()
+    db = SessionLocal()
+
+    try:
+        trade_repo = TradeRepository(db)
+        wheel_service = WheelService(db)
+        position_service = PositionMonitorService(db)
+
+        open_trades = trade_repo.list_open_trades()
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+
+        expired_count = 0
+        skipped_count = 0
+
+        for trade in open_trades:
+            if trade.expiration_date >= today:
+                continue
+
+            try:
+                quote_data = position_service.monitor._fetch_quote_data(
+                    trade.symbol, force_refresh=True
+                )
+
+                # Worst-case: check intraday high/low before falling back to lastPrice
+                price_at_expiry = quote_data["lastPrice"]
+                if trade.direction == "call":
+                    high_price = quote_data.get("highPrice")
+                    if high_price is not None and high_price >= trade.strike:
+                        price_at_expiry = high_price
+                elif trade.direction == "put":
+                    low_price = quote_data.get("lowPrice")
+                    if low_price is not None and low_price <= trade.strike:
+                        price_at_expiry = low_price
+
+                result = wheel_service.expire_trade(
+                    trade.id,
+                    TradeExpireRequest(price_at_expiry=price_at_expiry),
+                )
+
+                logger.info(
+                    f"Auto-expired trade {trade.id}: {trade.symbol} "
+                    f"{trade.direction} ${trade.strike} exp {trade.expiration_date} "
+                    f"-> {result.outcome} (price: ${price_at_expiry:.2f})"
+                )
+                expired_count += 1
+
+            except Exception as e:
+                logger.warning(
+                    f"Failed to auto-expire trade {trade.id} ({trade.symbol}): {e}"
+                )
+                skipped_count += 1
+
+        logger.info(
+            f"Auto-expiration complete: {expired_count} expired, "
+            f"{skipped_count} skipped"
+        )
+
+    except Exception as e:
+        logger.error(f"Auto-expiration task failed: {e}", exc_info=True)
     finally:
         db.close()

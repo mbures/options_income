@@ -86,6 +86,7 @@ def should_run_task(task_name: str, now: Optional[datetime] = None) -> bool:
 
     # Tasks that run after market close
     after_hours_tasks = {
+        "auto_expire_trades",
         "daily_snapshot",
     }
 

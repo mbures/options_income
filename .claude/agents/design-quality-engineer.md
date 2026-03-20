@@ -66,6 +66,7 @@ Coordinate with:
 6. **Async Correctness**: Are promises and async operations handled properly?
 7. **Financial Precision**: Are decimal calculations using appropriate precision?
 8. **API Contract**: Does code match expected API interfaces?
+9. **UI Changes**: Does the UI match the design, requirements, and coding conventions?
 
 ### Output Format
 When reporting findings, use this structure:
@@ -103,6 +104,7 @@ When reporting findings, use this structure:
 Before finalizing any review:
 1. Have I checked all modified/relevant files?
 2. Have I considered edge cases specific to financial calculations?
-3. Are my bug reports clear enough for developers to act on?
-4. Have I provided sufficient context for test additions?
-5. Are documentation update requests specific and actionable?
+3. If the change involves the UI, have I taken screenshots and compared the output to design specifications, requirments, and design conventions?
+4. Are my bug reports clear enough for developers to act on?
+5. Have I provided sufficient context for test additions?
+6. Are documentation update requests specific and actionable?
